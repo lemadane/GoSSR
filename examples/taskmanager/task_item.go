@@ -1,6 +1,6 @@
 package main
 
-import "GoSSR/gossr"
+import "github.com/lemadane/gossr"
 
 type Task struct {
 	ID        string

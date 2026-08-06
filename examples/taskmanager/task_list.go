@@ -1,6 +1,6 @@
 package main
 
-import "GoSSR/gossr"
+import "github.com/lemadane/gossr"
 
 type TaskListProperties struct {
 	Title    string
@@ -24,7 +24,7 @@ func TaskList(properties TaskListProperties) gossr.SSR {
 				<h1>${properties.Title}</h1>
 			</header>
 
-			<div class="task-controls" x-data="{ activeFilter: 'all' }">
+			<div class="task-controls">
 				<ul class="task-list">
 					${properties.Tasks.map(singleTask => TaskItem(TaskItemProperties{Task: singleTask}))}
 				</ul>

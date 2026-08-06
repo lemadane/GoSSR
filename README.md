@@ -8,7 +8,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ## Key Features
 
-- **100% Generic & Reusable Go Package**: Importable as `import "GoSSR/gossr"` (or `import "github.com/yourusername/gossr"`).
+- **Clean & Reusable Go Package**: Importable cleanly as `import "github.com/lemadane/gossr"`.
 - **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `gossr.SSR` interface.
 - **Zero CLI Build Steps**: Runs directly with standard `go run` or `go build` with zero node_modules or transpilers.
 - **Template Expression Parsing**:
@@ -24,16 +24,16 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ## Architecture & System Walkthrough
 
-The GoSSR architecture separates the reusable core rendering engine from domain-specific application components:
+The repository is structured as a root library package with an `examples/` subpackage:
 
-### Reusable Engine Package (`gossr/`)
-- **[gossr/engine.go](file:///home/lem/Projects/go/GoSSR/gossr/engine.go)**: The 100% generic reflection rendering engine implementing the `gossr.SSR` interface and `gossr.Render(templateString, scopeArguments...)` constructor. Evaluates properties, nested struct fields, child `SSR` components, ternary logic, and slice mappings with zero hardcoded domain dependencies.
+### Root Framework Package (`github.com/lemadane/gossr`)
+- **[engine.go](file:///home/lem/Projects/go/GoSSR/engine.go)**: The 100% generic reflection rendering engine at repository root implementing `gossr.SSR` and `gossr.Render(templateString, scopeArguments...)`.
 
-### Application Components (`main/`)
-- **[card.go](file:///home/lem/Projects/go/GoSSR/card.go)**: Container wrapper component accepting `Children gossr.SSR` and Title, styled with Alpine.js collapsible client state (`x-data="{ collapsed: false }"`).
-- **[task_item.go](file:///home/lem/Projects/go/GoSSR/task_item.go)**: Leaf item component integrating HTMX out-of-band deletion (`hx-delete`, `hx-target`, `hx-swap`) and Alpine.js inline deletion confirmation.
-- **[task_list.go](file:///home/lem/Projects/go/GoSSR/task_list.go)**: Page component composing task controls and rendering `[]gossr.SSR` slice items.
-- **[main.go](file:///home/lem/Projects/go/GoSSR/main.go)**: HTTP server exposing `/tasks` page and `/api/tasks/{id}` endpoint with embedded dark mode CSS styling and HTMX / AlpineJS CDN dependencies.
+### Example Task Application (`examples/taskmanager/`)
+- **[examples/taskmanager/card.go](file:///home/lem/Projects/go/GoSSR/examples/taskmanager/card.go)**: Container wrapper component accepting `Children gossr.SSR`.
+- **[examples/taskmanager/task_item.go](file:///home/lem/Projects/go/GoSSR/examples/taskmanager/task_item.go)**: Leaf item component integrating HTMX out-of-band deletion and Alpine.js confirmation.
+- **[examples/taskmanager/task_list.go](file:///home/lem/Projects/go/GoSSR/examples/taskmanager/task_list.go)**: Page component composing task controls and rendering `[]gossr.SSR` slice items.
+- **[examples/taskmanager/main.go](file:///home/lem/Projects/go/GoSSR/examples/taskmanager/main.go)**: HTTP server exposing `/tasks` page and `/api/tasks/{id}` endpoint with embedded dark mode styling.
 
 ---
 
@@ -41,12 +41,10 @@ The GoSSR architecture separates the reusable core rendering engine from domain-
 
 ### 1. Import Package & Define a Component
 
-Every component in **GoSSR** is a standard Go function returning `gossr.SSR` via `gossr.Render(...)`:
-
 ```go
 package main
 
-import "GoSSR/gossr"
+import "github.com/lemadane/gossr"
 
 type CardProperties struct {
 	Title    string
@@ -76,12 +74,10 @@ func Card(properties CardProperties) gossr.SSR {
 
 ### 2. Leaf Components & AHA Stack Interactivity
 
-Combine HTMX and Alpine.js inside backtick templates:
-
 ```go
 package main
 
-import "GoSSR/gossr"
+import "github.com/lemadane/gossr"
 
 type Task struct {
 	ID        string
@@ -122,12 +118,10 @@ func TaskItem(properties TaskItemProperties) gossr.SSR {
 
 ### 3. Generic List Mapping & Array Rendering
 
-Render dynamic arrays by mapping slice items into `[]gossr.SSR`:
-
 ```go
 package main
 
-import "GoSSR/gossr"
+import "github.com/lemadane/gossr"
 
 type TaskListProperties struct {
 	Title    string
@@ -168,16 +162,12 @@ func TaskList(properties TaskListProperties) gossr.SSR {
 
 ### 4. Serve HTTP Requests
 
-Render components directly into standard Go `http.ResponseWriter`:
-
 ```go
 package main
 
 import (
 	"fmt"
 	"net/http"
-
-	"GoSSR/gossr"
 )
 
 func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
@@ -224,9 +214,7 @@ Constructs a component by binding a backtick template string to scope property s
 
 ## Testing & Verification Results
 
-GoSSR includes test suites for both the engine subpackage (`gossr/engine_test.go`) and application E2E routes (`e2e_test.go`).
-
-Run the test suite with:
+Run the test suite across root library and example application:
 
 ```bash
 go test -v ./...
@@ -235,12 +223,6 @@ go test -v ./...
 ### Verified Test Output
 
 ```text
-=== RUN   TestE2ETaskPageEndpoint
---- PASS: TestE2ETaskPageEndpoint (0.00s)
-=== RUN   TestE2EDeleteTaskEndpoint
---- PASS: TestE2EDeleteTaskEndpoint (0.00s)
-PASS
-ok      GoSSR   0.006s
 === RUN   TestSimplePropertySubstitution
 --- PASS: TestSimplePropertySubstitution (0.00s)
 === RUN   TestNestedPropertySubstitution
@@ -252,10 +234,14 @@ ok      GoSSR   0.006s
 === RUN   TestGenericSliceMapping
 --- PASS: TestGenericSliceMapping (0.00s)
 PASS
-ok      GoSSR/gossr     0.004s
+ok      github.com/lemadane/gossr       0.003s
+=== RUN   TestE2ETaskPageEndpoint
+--- PASS: TestE2ETaskPageEndpoint (0.00s)
+=== RUN   TestE2EDeleteTaskEndpoint
+--- PASS: TestE2EDeleteTaskEndpoint (0.00s)
+PASS
+ok      github.com/lemadane/gossr/examples/taskmanager  0.005s
 ```
-
-All test cases pass cleanly across both packages.
 
 ---
 
@@ -263,16 +249,18 @@ All test cases pass cleanly across both packages.
 
 ```
 .
-├── gossr/
-│   ├── engine.go       # Reusable reflection rendering engine & gossr.SSR interface
-│   └── engine_test.go  # Unit test suite for gossr package
-├── card.go             # Card component wrapper
-├── task_item.go        # TaskItem leaf component with HTMX & Alpine.js
-├── task_list.go        # TaskList parent component & list mapper
-├── main.go             # HTTP server and route handlers
-├── e2e_test.go         # End-to-end integration test suite
-├── README.md           # Framework documentation & quickstart
-└── .gitignore          # Git ignore rules
+├── engine.go                 # Root framework rendering engine & gossr.SSR interface
+├── engine_test.go            # Unit test suite for root framework
+├── go.mod                    # Module definition (github.com/lemadane/gossr)
+├── README.md                 # Framework documentation & quickstart
+├── .gitignore                # Git ignore rules
+└── examples/
+    └── taskmanager/          # Example web application using gossr
+        ├── main.go
+        ├── card.go
+        ├── task_item.go
+        ├── task_list.go
+        └── e2e_test.go
 ```
 
 ---

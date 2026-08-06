@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"GoSSR/gossr"
+	"github.com/lemadane/gossr"
 )
 
 func TestSimplePropertySubstitution(testRunner *testing.T) {
