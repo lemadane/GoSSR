@@ -1,4 +1,4 @@
-# GoSSR ⚡
+# GoSSR
 
 **GoSSR** is a lightweight, pure, zero-transpilation Server-Side Rendering (SSR) framework for Go that brings a React-like Developer Experience (DX) directly to native Go backtick string templates.
 
@@ -6,7 +6,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ---
 
-## ✨ Key Features
+## Key Features
 
 - **100% Generic & Reusable Go Package**: Importable as `import "GoSSR/gossr"` (or `import "github.com/yourusername/gossr"`).
 - **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `gossr.SSR` interface.
@@ -22,14 +22,14 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ---
 
-## 🏗️ Architecture & System Walkthrough
+## Architecture & System Walkthrough
 
 The GoSSR architecture separates the reusable core rendering engine from domain-specific application components:
 
-### 📦 Reusable Engine Package (`gossr/`)
+### Reusable Engine Package (`gossr/`)
 - **[gossr/engine.go](file:///home/lem/Projects/go/GoSSR/gossr/engine.go)**: The 100% generic reflection rendering engine implementing the `gossr.SSR` interface and `gossr.Render(templateString, scopeArguments...)` constructor. Evaluates properties, nested struct fields, child `SSR` components, ternary logic, and slice mappings with zero hardcoded domain dependencies.
 
-### 🌐 Application Components (`main/`)
+### Application Components (`main/`)
 - **[card.go](file:///home/lem/Projects/go/GoSSR/card.go)**: Container wrapper component accepting `Children gossr.SSR` and Title, styled with Alpine.js collapsible client state (`x-data="{ collapsed: false }"`).
 - **[task_item.go](file:///home/lem/Projects/go/GoSSR/task_item.go)**: Leaf item component integrating HTMX out-of-band deletion (`hx-delete`, `hx-target`, `hx-swap`) and Alpine.js inline deletion confirmation.
 - **[task_list.go](file:///home/lem/Projects/go/GoSSR/task_list.go)**: Page component composing task controls and rendering `[]gossr.SSR` slice items.
@@ -37,7 +37,7 @@ The GoSSR architecture separates the reusable core rendering engine from domain-
 
 ---
 
-## 🚀 Quickstart Guide
+## Quickstart Guide
 
 ### 1. Import Package & Define a Component
 
@@ -204,7 +204,7 @@ func main() {
 
 ---
 
-## 🛠️ API Reference
+## API Reference
 
 ### `gossr.SSR` Interface
 ```go
@@ -222,7 +222,7 @@ Constructs a component by binding a backtick template string to scope property s
 
 ---
 
-## 🧪 Testing & Verification Results
+## Testing & Verification Results
 
 GoSSR includes test suites for both the engine subpackage (`gossr/engine_test.go`) and application E2E routes (`e2e_test.go`).
 
@@ -259,7 +259,7 @@ All test cases pass cleanly across both packages.
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 .
@@ -277,5 +277,5 @@ All test cases pass cleanly across both packages.
 
 ---
 
-## 📄 License
+## License
 MIT License
