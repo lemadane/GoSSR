@@ -1,6 +1,6 @@
 # GoSSR
 
-**GoSSR** is a lightweight, pure, zero-transpilation Server-Side Rendering (SSR) framework for Go that brings a React-like Developer Experience (DX) directly to native Go backtick string templates.
+**GoSSR** (**Server-Side Rendered HTML**) is a lightweight, pure, zero-transpilation framework for Go that brings a React-like Developer Experience (DX) directly to native Go backtick string templates.
 
 With **GoSSR**, you write component-based user interfaces in pure `.go` files with **zero external build steps, zero node_modules, zero transpilers, and zero code generators**.
 
@@ -9,7 +9,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 ## Key Features
 
 - **Clean & Reusable Go Package**: Importable cleanly as `import "github.com/lemadane/gossr"`.
-- **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `gossr.SSR` interface.
+- **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `gossr.SSR` (Server-Side Rendered HTML) interface.
 - **Zero CLI Build Steps**: Runs directly with standard `go run` or `go build` with zero node_modules or transpilers.
 - **Template Expression Parsing**:
   - `${properties.FieldName}`: Top-level property evaluation.
@@ -197,6 +197,9 @@ func main() {
 ## API Reference
 
 ### `gossr.SSR` Interface
+
+`SSR` stands for **Server-Side Rendered HTML**. It represents any component capable of writing HTML directly to an output stream (`io.Writer`) or rendering to string:
+
 ```go
 type SSR interface {
 	Render(writer io.Writer) error
