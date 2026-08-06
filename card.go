@@ -1,12 +1,14 @@
 package main
 
+import "GoSSR/gossr"
+
 type CardProperties struct {
 	Title    string
-	Children SSR
+	Children gossr.SSR
 }
 
-func Card(properties CardProperties) SSR {
-	return Render(`
+func Card(properties CardProperties) gossr.SSR {
+	return gossr.Render(`
 		<div class="card-container" x-data="{ collapsed: false }">
 			<header class="card-header">
 				<h3>${properties.Title}</h3>

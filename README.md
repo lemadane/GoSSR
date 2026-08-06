@@ -8,47 +8,53 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ## ✨ Key Features
 
-- **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `SSR` interface.
+- **100% Generic & Reusable Go Package**: Importable as `import "GoSSR/gossr"` (or `import "github.com/yourusername/gossr"`).
+- **React-like DX in Pure Go**: Define reusable UI components using standard Go functions returning the `gossr.SSR` interface.
 - **Zero CLI Build Steps**: Runs directly with standard `go run` or `go build` with zero node_modules or transpilers.
 - **Template Expression Parsing**:
   - `${properties.FieldName}`: Top-level property evaluation.
   - `${properties.Parent.Child}`: Nested struct property resolution.
-  - `${properties.Children}`: Embedded child `SSR` component rendering.
+  - `${properties.Children}`: Embedded child `gossr.SSR` component rendering.
   - `${properties.Condition ? "OptionA" : "OptionB"}`: Inline ternary conditional evaluation.
-  - `${properties.Slice.map(item => Component(...))}`: Slice mapping for list rendering.
+  - `${properties.Slice.map(item => Component(...))}`: Generic slice mapping for list rendering (`[]gossr.SSR`, `[]fmt.Stringer`, `[]any`).
 - **AHA Stack Native (ASTACK)**: Unescaped integration with **HTMX** out-of-band updates (`hx-delete`, `hx-target`, `hx-swap`) and **Alpine.js** client state (`x-data`, `x-show`, `@click`).
-- **High-Performance Stream Rendering**: Render directly to `io.Writer` or `http.ResponseWriter` with `Render(writer)`.
+- **High-Performance Stream Rendering**: Render directly to `io.Writer` or `http.ResponseWriter` with `gossr.Render(writer)`.
 
 ---
 
 ## 🏗️ Architecture & System Walkthrough
 
-The GoSSR architecture is built around decoupled, single-responsibility Go modules:
+The GoSSR architecture separates the reusable core rendering engine from domain-specific application components:
 
-- **[engine.go](file:///home/lem/Projects/go/GoSSR/engine.go)**: The reflection rendering engine implementing the `SSR` interface and `Render(templateString, scopeArguments...)` constructor helper. Safely evaluates top-level properties, nested struct fields (`Task.ID`), ternary expressions (`Completed ? "Done" : "Pending"`), child `SSR` components, and slice mapping expressions while ignoring unexported struct fields.
-- **[card.go](file:///home/lem/Projects/go/GoSSR/card.go)**: Reusable container wrapper accepting `Children SSR` and Title, styled with Alpine.js collapsible client state (`x-data="{ collapsed: false }"`).
+### 📦 Reusable Engine Package (`gossr/`)
+- **[gossr/engine.go](file:///home/lem/Projects/go/GoSSR/gossr/engine.go)**: The 100% generic reflection rendering engine implementing the `gossr.SSR` interface and `gossr.Render(templateString, scopeArguments...)` constructor. Evaluates properties, nested struct fields, child `SSR` components, ternary logic, and slice mappings with zero hardcoded domain dependencies.
+
+### 🌐 Application Components (`main/`)
+- **[card.go](file:///home/lem/Projects/go/GoSSR/card.go)**: Container wrapper component accepting `Children gossr.SSR` and Title, styled with Alpine.js collapsible client state (`x-data="{ collapsed: false }"`).
 - **[task_item.go](file:///home/lem/Projects/go/GoSSR/task_item.go)**: Leaf item component integrating HTMX out-of-band deletion (`hx-delete`, `hx-target`, `hx-swap`) and Alpine.js inline deletion confirmation.
-- **[task_list.go](file:///home/lem/Projects/go/GoSSR/task_list.go)**: Page component composing task controls and rendering array mapping over `TaskList` slice items.
+- **[task_list.go](file:///home/lem/Projects/go/GoSSR/task_list.go)**: Page component composing task controls and rendering `[]gossr.SSR` slice items.
 - **[main.go](file:///home/lem/Projects/go/GoSSR/main.go)**: HTTP server exposing `/tasks` page and `/api/tasks/{id}` endpoint with embedded dark mode CSS styling and HTMX / AlpineJS CDN dependencies.
 
 ---
 
 ## 🚀 Quickstart Guide
 
-### 1. Define a Component
+### 1. Import Package & Define a Component
 
-Every component in **GoSSR** is a standard Go function returning the `SSR` interface via the `Render(...)` helper:
+Every component in **GoSSR** is a standard Go function returning `gossr.SSR` via `gossr.Render(...)`:
 
 ```go
 package main
 
+import "GoSSR/gossr"
+
 type CardProperties struct {
 	Title    string
-	Children SSR
+	Children gossr.SSR
 }
 
-func Card(properties CardProperties) SSR {
-	return Render(`
+func Card(properties CardProperties) gossr.SSR {
+	return gossr.Render(`
 		<div class="card-container" x-data="{ collapsed: false }">
 			<header class="card-header">
 				<h3>${properties.Title}</h3>
@@ -75,6 +81,8 @@ Combine HTMX and Alpine.js inside backtick templates:
 ```go
 package main
 
+import "GoSSR/gossr"
+
 type Task struct {
 	ID        string
 	Title     string
@@ -85,8 +93,8 @@ type TaskItemProperties struct {
 	Task Task
 }
 
-func TaskItem(properties TaskItemProperties) SSR {
-	return Render(`
+func TaskItem(properties TaskItemProperties) gossr.SSR {
+	return gossr.Render(`
 		<li id="task-${properties.Task.ID}" class="task-item ${properties.Task.Completed ? "completed" : "pending"}">
 			<div class="task-info">
 				<span class="task-badge">${properties.Task.Completed ? "Completed" : "Pending"}</span>
@@ -112,20 +120,32 @@ func TaskItem(properties TaskItemProperties) SSR {
 
 ---
 
-### 3. List Mapping & Array Rendering
+### 3. Generic List Mapping & Array Rendering
 
-Render dynamic arrays using the `${properties.SliceName.map(...)}` syntax:
+Render dynamic arrays by mapping slice items into `[]gossr.SSR`:
 
 ```go
 package main
+
+import "GoSSR/gossr"
 
 type TaskListProperties struct {
 	Title    string
 	TaskList []Task
 }
 
-func TaskList(properties TaskListProperties) SSR {
-	return Render(`
+func TaskList(properties TaskListProperties) gossr.SSR {
+	renderedTaskItems := make([]gossr.SSR, len(properties.TaskList))
+	for index, singleTask := range properties.TaskList {
+		renderedTaskItems[index] = TaskItem(TaskItemProperties{Task: singleTask})
+	}
+
+	type TaskListRenderProperties struct {
+		Title string
+		Tasks []gossr.SSR
+	}
+
+	return gossr.Render(`
 		<main class="page-container">
 			<header class="page-header">
 				<h1>${properties.Title}</h1>
@@ -133,11 +153,14 @@ func TaskList(properties TaskListProperties) SSR {
 
 			<div class="task-controls">
 				<ul class="task-list">
-					${properties.TaskList.map(singleTask => TaskItem(TaskItemProperties{Task: singleTask}))}
+					${properties.Tasks.map(singleTask => TaskItem(TaskItemProperties{Task: singleTask}))}
 				</ul>
 			</div>
 		</main>
-	`, properties)
+	`, TaskListRenderProperties{
+		Title: properties.Title,
+		Tasks: renderedTaskItems,
+	})
 }
 ```
 
@@ -153,6 +176,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+
+	"GoSSR/gossr"
 )
 
 func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
@@ -181,7 +206,7 @@ func main() {
 
 ## 🛠️ API Reference
 
-### `SSR` Interface
+### `gossr.SSR` Interface
 ```go
 type SSR interface {
 	Render(writer io.Writer) error
@@ -189,7 +214,7 @@ type SSR interface {
 }
 ```
 
-### `Render()` Helper
+### `gossr.Render()` Helper
 ```go
 func Render(templateString string, scopeArguments ...any) SSR
 ```
@@ -199,7 +224,7 @@ Constructs a component by binding a backtick template string to scope property s
 
 ## 🧪 Testing & Verification Results
 
-GoSSR includes a comprehensive unit test suite (`engine_test.go`) and end-to-end integration test suite (`e2e_test.go`).
+GoSSR includes test suites for both the engine subpackage (`gossr/engine_test.go`) and application E2E routes (`e2e_test.go`).
 
 Run the test suite with:
 
@@ -214,6 +239,8 @@ go test -v ./...
 --- PASS: TestE2ETaskPageEndpoint (0.00s)
 === RUN   TestE2EDeleteTaskEndpoint
 --- PASS: TestE2EDeleteTaskEndpoint (0.00s)
+PASS
+ok      GoSSR   0.006s
 === RUN   TestSimplePropertySubstitution
 --- PASS: TestSimplePropertySubstitution (0.00s)
 === RUN   TestNestedPropertySubstitution
@@ -222,13 +249,13 @@ go test -v ./...
 --- PASS: TestChildComponentRendering (0.00s)
 === RUN   TestTernaryExpression
 --- PASS: TestTernaryExpression (0.00s)
-=== RUN   TestSliceMapping
---- PASS: TestSliceMapping (0.00s)
+=== RUN   TestGenericSliceMapping
+--- PASS: TestGenericSliceMapping (0.00s)
 PASS
-ok      GoSSR   0.007s
+ok      GoSSR/gossr     0.004s
 ```
 
-All 7 test cases pass cleanly, verifying property evaluation, nested struct fields, child component composition, ternary logic, slice mappings, HTTP page rendering, and HTMX out-of-band endpoints.
+All test cases pass cleanly across both packages.
 
 ---
 
@@ -236,15 +263,16 @@ All 7 test cases pass cleanly, verifying property evaluation, nested struct fiel
 
 ```
 .
-├── engine.go       # Reflection rendering engine & SSR interface
-├── card.go         # Card component wrapper
-├── task_item.go    # TaskItem leaf component with HTMX & Alpine.js
-├── task_list.go    # TaskList parent component & list mapper
-├── main.go         # HTTP server and route handlers
-├── engine_test.go  # Unit test suite
-├── e2e_test.go     # End-to-end integration test suite
-├── README.md       # Framework documentation & quickstart
-└── .gitignore      # Git ignore rules
+├── gossr/
+│   ├── engine.go       # Reusable reflection rendering engine & gossr.SSR interface
+│   └── engine_test.go  # Unit test suite for gossr package
+├── card.go             # Card component wrapper
+├── task_item.go        # TaskItem leaf component with HTMX & Alpine.js
+├── task_list.go        # TaskList parent component & list mapper
+├── main.go             # HTTP server and route handlers
+├── e2e_test.go         # End-to-end integration test suite
+├── README.md           # Framework documentation & quickstart
+└── .gitignore          # Git ignore rules
 ```
 
 ---

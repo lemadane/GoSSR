@@ -1,4 +1,4 @@
-package main
+package gossr
 
 import (
 	"fmt"
@@ -36,16 +36,12 @@ func (component renderComponent) Render(writer io.Writer) error {
 	return writeError
 }
 
+// Render constructs a new SSR component by binding a backtick template string to scope property structs.
 func Render(templateString string, scopeArguments ...any) SSR {
 	return renderComponent{
 		templateString: templateString,
 		scopeArguments: scopeArguments,
 	}
-}
-
-// ssr is an unexported alias for Render to ensure full backwards compatibility
-func ssr(templateString string, scopeArguments ...any) SSR {
-	return Render(templateString, scopeArguments...)
 }
 
 func processScopeArgument(templateString string, argument any) string {
@@ -66,7 +62,7 @@ func processScopeArgument(templateString string, argument any) string {
 			fieldName := structField.Name
 			fieldValue := fieldVal.Interface()
 
-			// Process map expressions for slice fields
+			// Process map expressions for slice fields (100% generic)
 			templateString = processMapExpressions(templateString, fieldName, fieldValue)
 
 			// Process top-level ternary expressions
@@ -105,7 +101,7 @@ func processScopeArgument(templateString string, argument any) string {
 						templateString = strings.ReplaceAll(templateString, nestedPattern, fmt.Sprintf("%v", nestedFieldValue))
 					}
 
-					// Process nested ternary expressions (e.g. ${properties.Task.Completed ? "done" : "pending"})
+					// Process nested ternary expressions
 					templateString = processNestedTernaryExpressions(templateString, fieldName, nestedFieldName, nestedFieldValue)
 				}
 			}
@@ -213,9 +209,7 @@ func processMapExpressions(templateString string, fieldName string, fieldValue a
 	for index := 0; index < sliceValue.Len(); index++ {
 		item := sliceValue.Index(index).Interface()
 
-		if singleTask, isTask := item.(Task); isTask {
-			renderedItems.WriteString(TaskItem(TaskItemProperties{Task: singleTask}).String())
-		} else if renderableItem, isRenderable := item.(SSR); isRenderable {
+		if renderableItem, isRenderable := item.(SSR); isRenderable {
 			renderedItems.WriteString(renderableItem.String())
 		} else if stringerItem, isStringer := item.(fmt.Stringer); isStringer {
 			renderedItems.WriteString(stringerItem.String())

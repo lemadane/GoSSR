@@ -1,5 +1,7 @@
 package main
 
+import "GoSSR/gossr"
+
 type Task struct {
 	ID        string
 	Title     string
@@ -10,8 +12,8 @@ type TaskItemProperties struct {
 	Task Task
 }
 
-func TaskItem(properties TaskItemProperties) SSR {
-	return Render(`
+func TaskItem(properties TaskItemProperties) gossr.SSR {
+	return gossr.Render(`
 		<li id="task-${properties.Task.ID}" class="task-item ${properties.Task.Completed ? "completed" : "pending"}">
 			<div class="task-info">
 				<span class="task-badge">${properties.Task.Completed ? "Completed" : "Pending"}</span>
