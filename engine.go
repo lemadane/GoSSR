@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // SSR represents any component capable of writing HTML directly to an output stream.
@@ -63,18 +65,24 @@ func Handler(factory func(request *http.Request) SSR) http.HandlerFunc {
 // MaxRenderDepth defines the maximum allowed component nesting depth before throwing a recursion error.
 const MaxRenderDepth = 100
 
-// StrictMode controls whether unresolved property placeholders (such as typo '${properties.Custmer.Name}')
-// produce a rendering error. Defaults to false for permissive rendering.
-var StrictMode = false
+var strictModeAtomic int32
 
-// SetStrict enables or disables strict mode property resolution error checking.
+// SetStrict enables or disables strict mode property resolution error checking in a thread-safe manner.
 func SetStrict(strict bool) {
-	StrictMode = strict
+	if strict {
+		atomic.StoreInt32(&strictModeAtomic, 1)
+	} else {
+		atomic.StoreInt32(&strictModeAtomic, 0)
+	}
 }
 
 // Strict enables or disables strict mode property resolution error checking.
 func Strict(strict bool) {
-	StrictMode = strict
+	SetStrict(strict)
+}
+
+func isStrict() bool {
+	return atomic.LoadInt32(&strictModeAtomic) == 1
 }
 
 var (
@@ -227,20 +235,215 @@ func Render(templateString string, scopeArguments ...any) SSR {
 	}
 }
 
-// CompiledTemplate represents a pre-validated, immutable template ready for fast binding.
+// CompiledTemplate represents a pre-parsed, immutable template AST ready for fast binding.
 type CompiledTemplate struct {
 	rawTemplate string
+	astNodes    []templateASTNode
 }
 
-// Compile pre-validates and compiles a template string into a CompiledTemplate.
+type templateASTNode interface {
+	renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error
+}
+
+type astStaticTextNode struct {
+	text string
+}
+
+func (n astStaticTextNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
+	_, err := io.WriteString(writer, n.text)
+	return err
+}
+
+type astPropertyNode struct {
+	path        []string
+	pathString  string
+	attrContext string
+}
+
+func (n astPropertyNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
+	var value any
+	var found bool
+	for _, arg := range scopeArguments {
+		value, found = resolvePropertyPath(arg, n.path)
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		if strict {
+			return fmt.Errorf("GoSSR strict mode error: unresolved property path '${properties.%s}'", n.pathString)
+		}
+		_, err := io.WriteString(writer, fmt.Sprintf("${properties.%s}", n.pathString))
+		return err
+	}
+	return formatAndRenderValueForContext(writer, value, n.attrContext)
+}
+
+type astTernaryNode struct {
+	prefix      string
+	path        []string
+	pathString  string
+	operator    string
+	targetValue string
+	trueBranch  string
+	falseBranch string
+}
+
+func (n astTernaryNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
+	var value any
+	var found bool
+	for _, arg := range scopeArguments {
+		value, found = resolvePropertyPath(arg, n.path)
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		if strict {
+			return fmt.Errorf("GoSSR strict mode error: unresolved ternary property path '${%s.%s}'", n.prefix, n.pathString)
+		}
+		_, err := io.WriteString(writer, n.falseBranch)
+		return err
+	}
+
+	var conditionMet bool
+	if n.operator == "==" {
+		conditionMet = fmt.Sprintf("%v", value) == n.targetValue
+	} else if n.operator == "!=" {
+		conditionMet = fmt.Sprintf("%v", value) != n.targetValue
+	} else {
+		conditionMet = evaluateTruthiness(value)
+	}
+
+	resultText := n.falseBranch
+	if conditionMet {
+		resultText = n.trueBranch
+	}
+	_, err := io.WriteString(writer, resultText)
+	return err
+}
+
+type astMapNode struct {
+	path       []string
+	pathString string
+	varName    string
+	bodyAST    []templateASTNode
+}
+
+func (n astMapNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
+	var targetValue any
+	var found bool
+	for _, arg := range scopeArguments {
+		targetValue, found = resolvePropertyPath(arg, n.path)
+		if found {
+			break
+		}
+	}
+
+	if !found {
+		if strict {
+			return fmt.Errorf("GoSSR strict mode error: unresolved map property path '${properties.%s}'", n.pathString)
+		}
+		return nil
+	}
+
+	sliceValue := reflect.ValueOf(targetValue)
+	if sliceValue.Kind() == reflect.Pointer {
+		sliceValue = sliceValue.Elem()
+	}
+	if sliceValue.Kind() != reflect.Slice && sliceValue.Kind() != reflect.Array {
+		return nil
+	}
+
+	for itemIndex := 0; itemIndex < sliceValue.Len(); itemIndex++ {
+		item := sliceValue.Index(itemIndex).Interface()
+		for _, childNode := range n.bodyAST {
+			if err := childNode.renderAST(writer, []any{item}, depth, strict); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func parseTemplateAST(templateString string) []templateASTNode {
+	var nodes []templateASTNode
+
+	matches := mapRegex.FindAllStringSubmatchIndex(templateString, -1)
+	if len(matches) > 0 {
+		lastIndex := 0
+		for _, loc := range matches {
+			matchStart, matchEnd := loc[0], loc[1]
+			if matchStart > lastIndex {
+				nodes = append(nodes, parseFlatTemplateAST(templateString[lastIndex:matchStart])...)
+			}
+
+			pathString := templateString[loc[2]:loc[3]]
+			variableName := templateString[loc[4]:loc[5]]
+			bodyExpression := templateString[loc[6]:loc[7]]
+
+			nodes = append(nodes, astMapNode{
+				path:       strings.Split(pathString, "."),
+				pathString: pathString,
+				varName:    variableName,
+				bodyAST:    parseTemplateAST(bodyExpression),
+			})
+			lastIndex = matchEnd
+		}
+		if lastIndex < len(templateString) {
+			nodes = append(nodes, parseFlatTemplateAST(templateString[lastIndex:])...)
+		}
+		return nodes
+	}
+
+	return parseFlatTemplateAST(templateString)
+}
+
+func parseFlatTemplateAST(templateString string) []templateASTNode {
+	var nodes []templateASTNode
+	propMatches := propertyRegex.FindAllStringSubmatchIndex(templateString, -1)
+	if len(propMatches) > 0 {
+		lastIndex := 0
+		for _, loc := range propMatches {
+			matchStart, matchEnd := loc[0], loc[1]
+			if matchStart > lastIndex {
+				nodes = append(nodes, astStaticTextNode{text: templateString[lastIndex:matchStart]})
+			}
+
+			pathString := templateString[loc[2]:loc[3]]
+			attrContext := getInterpolationAttributeContext(templateString, matchStart)
+			nodes = append(nodes, astPropertyNode{
+				path:        strings.Split(pathString, "."),
+				pathString:  pathString,
+				attrContext: attrContext,
+			})
+			lastIndex = matchEnd
+		}
+		if lastIndex < len(templateString) {
+			nodes = append(nodes, astStaticTextNode{text: templateString[lastIndex:]})
+		}
+		return nodes
+	}
+
+	nodes = append(nodes, astStaticTextNode{text: templateString})
+	return nodes
+}
+
+// Compile pre-validates and parses a template string into a pre-compiled AST.
 func Compile(templateString string) (CompiledTemplate, error) {
 	if err := validateInterpolationSecurityContext(templateString); err != nil {
 		return CompiledTemplate{}, err
 	}
-	return CompiledTemplate{rawTemplate: templateString}, nil
+	astNodes := parseTemplateAST(templateString)
+	return CompiledTemplate{
+		rawTemplate: templateString,
+		astNodes:    astNodes,
+	}, nil
 }
 
-// MustCompile compiles a template string or panics if compilation fails security validation.
+// MustCompile compiles a template string into an AST or panics if compilation fails security validation.
 func MustCompile(templateString string) CompiledTemplate {
 	compiled, err := Compile(templateString)
 	if err != nil {
@@ -249,14 +452,44 @@ func MustCompile(templateString string) CompiledTemplate {
 	return compiled
 }
 
-// Bind returns an SSR component bound to the compiled template and scope arguments.
+type compiledComponent struct {
+	compiledTemplate CompiledTemplate
+	scopeArguments   []any
+}
+
+func (c compiledComponent) String() string {
+	var sb strings.Builder
+	if err := c.Render(&sb); err != nil {
+		return fmt.Sprintf("<!-- Render Error: %v -->", err)
+	}
+	return sb.String()
+}
+
+func (c compiledComponent) Render(writer io.Writer) error {
+	for _, node := range c.compiledTemplate.astNodes {
+		if err := node.renderAST(writer, c.scopeArguments, 0, isStrict()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Bind returns an SSR component bound to the compiled AST and scope arguments.
 func (compiledTemplate CompiledTemplate) Bind(scopeArguments ...any) SSR {
-	return Render(compiledTemplate.rawTemplate, scopeArguments...)
+	return compiledComponent{
+		compiledTemplate: compiledTemplate,
+		scopeArguments:   scopeArguments,
+	}
 }
 
 // Render renders the compiled template directly with scope arguments to an io.Writer.
 func (compiledTemplate CompiledTemplate) Render(writer io.Writer, scopeArguments ...any) error {
-	return Render(compiledTemplate.rawTemplate, scopeArguments...).Render(writer)
+	for _, node := range compiledTemplate.astNodes {
+		if err := node.renderAST(writer, scopeArguments, 0, isStrict()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func isUrlAttribute(attrName string) bool {
@@ -355,35 +588,60 @@ func getInterpolationAttributeContext(templateHtml string, matchIndex int) strin
 	return ""
 }
 
-func formatAndEscapeValueForContext(value any, attrContext string) string {
+func formatAndRenderValueForContext(writer io.Writer, value any, attrContext string) error {
 	if value == nil {
-		return ""
+		return nil
 	}
 
 	reflectionValue := reflect.ValueOf(value)
 	if (reflectionValue.Kind() == reflect.Pointer || reflectionValue.Kind() == reflect.Interface || reflectionValue.Kind() == reflect.Slice || reflectionValue.Kind() == reflect.Map) && reflectionValue.IsNil() {
-		return ""
+		return nil
 	}
 
 	if ssr, isSSR := value.(SSR); isSSR {
-		return ssr.String()
+		if attrContext != "" {
+			// Inside HTML attributes, raw HTML/SSR components MUST be attribute-escaped
+			// to prevent attribute breakouts (e.g. RawHtml containing quotes)
+			if safeUrl, isSafeUrl := value.(SafeUrl); isSafeUrl && isUrlAttribute(attrContext) {
+				_, err := io.WriteString(writer, html.EscapeString(SanitizeUrl(safeUrl.Value)))
+				return err
+			}
+			var sb strings.Builder
+			if err := ssr.Render(&sb); err != nil {
+				return err // PROPAGATE CHILD COMPONENT RENDER ERROR UPWARD
+			}
+			_, err := io.WriteString(writer, html.EscapeString(sb.String()))
+			return err
+		}
+
+		// Body context: render child SSR component directly into writer
+		return ssr.Render(writer) // PROPAGATE CHILD COMPONENT RENDER ERROR UPWARD
 	}
 
 	if reflectionValue.Kind() == reflect.Slice || reflectionValue.Kind() == reflect.Array {
-		var stringBuilder strings.Builder
 		for itemIndex := 0; itemIndex < reflectionValue.Len(); itemIndex++ {
 			item := reflectionValue.Index(itemIndex).Interface()
-			stringBuilder.WriteString(formatAndEscapeValueForContext(item, attrContext))
+			if err := formatAndRenderValueForContext(writer, item, attrContext); err != nil {
+				return err
+			}
 		}
-		return stringBuilder.String()
+		return nil
 	}
 
 	valStr := fmt.Sprintf("%v", value)
 	if isUrlAttribute(attrContext) {
-		return html.EscapeString(SanitizeUrl(valStr))
+		_, err := io.WriteString(writer, html.EscapeString(SanitizeUrl(valStr)))
+		return err
 	}
 
-	return html.EscapeString(valStr)
+	_, err := io.WriteString(writer, html.EscapeString(valStr))
+	return err
+}
+
+func formatAndEscapeValueForContext(value any, attrContext string) string {
+	var sb strings.Builder
+	_ = formatAndRenderValueForContext(&sb, value, attrContext)
+	return sb.String()
 }
 
 func formatAndEscapeValue(value any) string {
@@ -412,7 +670,26 @@ func resolvePropertyPath(root any, path []string) (any, bool) {
 			}
 			current = field
 		} else if current.Kind() == reflect.Map {
-			mapKey := reflect.ValueOf(name)
+			mapKeyType := current.Type().Key()
+			var mapKey reflect.Value
+			if mapKeyType.Kind() == reflect.String {
+				mapKey = reflect.ValueOf(name)
+			} else if mapKeyType.Kind() == reflect.Int || mapKeyType.Kind() == reflect.Int64 || mapKeyType.Kind() == reflect.Int32 || mapKeyType.Kind() == reflect.Int16 || mapKeyType.Kind() == reflect.Int8 {
+				if intVal, err := strconv.ParseInt(name, 10, 64); err == nil {
+					mapKey = reflect.ValueOf(intVal).Convert(mapKeyType)
+				} else {
+					return nil, false
+				}
+			} else if mapKeyType.Kind() == reflect.Uint || mapKeyType.Kind() == reflect.Uint64 || mapKeyType.Kind() == reflect.Uint32 || mapKeyType.Kind() == reflect.Uint16 || mapKeyType.Kind() == reflect.Uint8 {
+				if uintVal, err := strconv.ParseUint(name, 10, 64); err == nil {
+					mapKey = reflect.ValueOf(uintVal).Convert(mapKeyType)
+				} else {
+					return nil, false
+				}
+			} else {
+				return nil, false
+			}
+
 			mapValue := current.MapIndex(mapKey)
 			if !mapValue.IsValid() || !mapValue.CanInterface() {
 				return nil, false
@@ -454,7 +731,7 @@ func processScopeArgumentProperties(templateString string, argument any) (string
 			path := strings.Split(pathString, ".")
 			targetValue, found := resolvePropertyPath(argument, path)
 			if !found {
-				if StrictMode {
+				if isStrict() {
 					return "", fmt.Errorf("GoSSR strict mode error: unresolved map property path '${properties.%s}'", pathString)
 				}
 				sb.WriteString(templateString[matchStart:matchEnd])
@@ -530,9 +807,11 @@ func processScopeArgumentProperties(templateString string, argument any) (string
 			value, found := resolvePropertyPath(argument, path)
 			if found {
 				attrContext := getInterpolationAttributeContext(templateString, matchStart)
-				sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
+				if err := formatAndRenderValueForContext(&sb, value, attrContext); err != nil {
+					return "", err
+				}
 			} else {
-				if StrictMode {
+				if isStrict() {
 					return "", fmt.Errorf("GoSSR strict mode error: unresolved property path '${properties.%s}'", pathString)
 				}
 				sb.WriteString(templateString[matchStart:matchEnd])
@@ -576,7 +855,9 @@ func processMapItemTemplate(templateString string, variableName string, item any
 			if loc[4] == -1 || loc[5] == -1 {
 				// Direct reference ${variableName}
 				attrContext := getInterpolationAttributeContext(templateString, matchStart)
-				sb.WriteString(formatAndEscapeValueForContext(item, attrContext))
+				if err := formatAndRenderValueForContext(&sb, item, attrContext); err != nil {
+					return "", err
+				}
 			} else {
 				pathString := templateString[loc[4]:loc[5]]
 				path := strings.Split(pathString, ".")
@@ -584,9 +865,11 @@ func processMapItemTemplate(templateString string, variableName string, item any
 				value, found := resolvePropertyPath(item, path)
 				if found {
 					attrContext := getInterpolationAttributeContext(templateString, matchStart)
-					sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
+					if err := formatAndRenderValueForContext(&sb, value, attrContext); err != nil {
+						return "", err
+					}
 				} else {
-					if StrictMode {
+					if isStrict() {
 						return "", fmt.Errorf("GoSSR strict mode error: unresolved property path '${%s.%s}'", variableName, pathString)
 					}
 					sb.WriteString(templateString[matchStart:matchEnd])
@@ -616,7 +899,7 @@ func processTernaryExpressions(templateString string, prefix string, scope any) 
 
 			value, found := resolvePropertyPath(scope, path)
 			if !found {
-				if StrictMode && strictErr == nil {
+				if isStrict() && strictErr == nil {
 					strictErr = fmt.Errorf("GoSSR strict mode error: unresolved ternary property path '${%s.%s}'", prefix, submatches[2])
 				}
 				return match
@@ -655,7 +938,7 @@ func processTernaryExpressions(templateString string, prefix string, scope any) 
 
 			value, found := resolvePropertyPath(scope, path)
 			if !found {
-				if StrictMode && strictErr == nil {
+				if isStrict() && strictErr == nil {
 					strictErr = fmt.Errorf("GoSSR strict mode error: unresolved ternary property path '${%s.%s}'", prefix, submatches[2])
 				}
 				return match

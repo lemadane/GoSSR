@@ -16,7 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **URL Context Protocol Auto-Sanitization**: Plain strings interpolated into URL attributes (`href`, `src`, `action`, etc.) with dangerous schemes (`javascript:`, `data:`) sanitize automatically to `about:blank`.
 - **Explicit Security Wrappers**: `gossr.RawHtml` (`gossr.Raw(...)`) and `gossr.SafeUrl` (`gossr.URL(...)`).
 - **Native HTTP Handlers**: `gossr.RenderHTTP(w, comp)` and `gossr.Handler(factoryFn)` with configurable `ErrorHandler` callback.
-- **Production CI Pipeline**: GitHub Actions multi-version matrix (`Go 1.22`, `1.23`, `1.24`), `staticcheck`, `govulncheck`, `-race`, fuzzing, and benchmark regression checks.
+- **Attribute Security Boundary Enforcement**: `RawHtml` inside HTML attribute contexts (`attrContext != ""`) is automatically attribute-escaped to prevent attribute breakouts.
+- **Nested Child Component Error Propagation**: Errors from child `SSR` component rendering propagate directly to parent components and `RenderHTTP` (returning HTTP 500) rather than being swallowed as HTML comments.
+- **Panic-Proof Map Property Resolution**: Property path resolution safely handles `map[int]T`, `map[uint]T`, and non-string map key types via type checking and parsing instead of panicking in reflection.
+- **Thread-Safe Strict Mode & Concurrency Protection**: Atomic `sync/atomic` implementation for `SetStrict(bool)` and `Strict(bool)` eliminating race conditions under concurrent requests.
+- **Real Pre-Compiled AST Node Execution Graph**: `gossr.MustCompile` and `gossr.Compile` build an immutable node graph (`astStaticNode`, `astPropertyNode`, `astTernaryNode`, `astMapNode`), providing fast regex-free AST rendering.
 
 ### Performance
-- Pre-compiled package regexes, achieving **6.2 µs/render** (8.3x speedup, 91% reduction in memory allocations).
+- Pre-compiled package regexes and AST pre-parsing, achieving **6.2 µs/render** (8.3x speedup, 91% reduction in memory allocations) and fast execution for large `.map()` slice iterations.

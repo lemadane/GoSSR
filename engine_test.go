@@ -371,3 +371,52 @@ func TestCompiledTemplateAndMustCompile(testRunner *testing.T) {
 	}()
 	_ = gossr.MustCompile(`<script>${properties.Val}</script>`)
 }
+
+func TestRawHtmlInsideAttributeIsEscaped(testRunner *testing.T) {
+	comp := gossr.Render(`<div id="${properties.Raw}"></div>`, struct {
+		Raw gossr.RawHtml
+	}{
+		Raw: gossr.Raw(`" onclick="alert(1)`),
+	})
+
+	output := comp.String()
+	if strings.Contains(output, `id="" onclick="alert(1)"`) || (!strings.Contains(output, `&#34;`) && !strings.Contains(output, `&quot;`)) {
+		testRunner.Errorf("Expected RawHtml inside attribute context to be double-quote escaped, got %q", output)
+	}
+}
+
+func TestNestedChildComponentErrorPropagation(testRunner *testing.T) {
+	child := gossr.Render(`<script>${properties.Value}</script>`, struct {
+		Value string
+	}{
+		Value: "unsafe",
+	})
+
+	parent := gossr.Render(`<div>${properties.Child}</div>`, struct {
+		Child gossr.SSR
+	}{
+		Child: child,
+	})
+
+	var sb strings.Builder
+	err := parent.Render(&sb)
+	if err == nil {
+		testRunner.Error("Expected parent.Render to fail when child component returns render error, got nil error")
+	}
+}
+
+func TestNonStringKeyedMapNoPanic(testRunner *testing.T) {
+	type IntMapProps struct {
+		Map map[int]string
+	}
+	intComp := gossr.Render(`<p>${properties.Map.42}</p>`, IntMapProps{Map: map[int]string{42: "Answer"}})
+	if intComp.String() != `<p>Answer</p>` {
+		testRunner.Errorf("Expected int-keyed map resolution '<p>Answer</p>', got %q", intComp.String())
+	}
+
+	type StructKeyProps struct {
+		Map map[struct{}]string
+	}
+	structComp := gossr.Render(`<p>${properties.Map.key}</p>`, StructKeyProps{Map: map[struct{}]string{{}: "Val"}})
+	_ = structComp.String() // Must NOT panic!
+}

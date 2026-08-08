@@ -470,6 +470,12 @@ go test -count=1 -v ./...
 --- PASS: TestStrictModeUnresolvedPropertyError (0.00s)
 === RUN   TestCompiledTemplateAndMustCompile
 --- PASS: TestCompiledTemplateAndMustCompile (0.00s)
+=== RUN   TestRawHtmlInsideAttributeIsEscaped
+--- PASS: TestRawHtmlInsideAttributeIsEscaped (0.00s)
+=== RUN   TestNestedChildComponentErrorPropagation
+--- PASS: TestNestedChildComponentErrorPropagation (0.00s)
+=== RUN   TestNonStringKeyedMapNoPanic
+--- PASS: TestNonStringKeyedMapNoPanic (0.00s)
 === RUN   TestFormInputAttributeQuoteProtection
 --- PASS: TestFormInputAttributeQuoteProtection (0.00s)
 === RUN   TestCheckboxAndRadioButtonRendering
