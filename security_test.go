@@ -253,3 +253,49 @@ func TestCustomTagPropsReflectionNoPanic(testRunner *testing.T) {
 		testRunner.Errorf("Expected RawHtml field on custom tag props to output unescaped HTML, got %q", output)
 	}
 }
+
+func TestMapLambdaSecurityContextRejectionAndSanitization(testRunner *testing.T) {
+	type Item struct {
+		Payload string
+		URL     string
+		Text    string
+	}
+	type Props struct {
+		Items []Item
+	}
+
+	items := []Item{
+		{Payload: "alert(1)", URL: "javascript:alert(1)", Text: "<script>alert('x')</script>"},
+	}
+	props := Props{Items: items}
+
+	rejectionTemplates := []string{
+		`<div>${properties.Items.map(item => <button onclick="${item.Payload}">Click</button>)}</div>`,
+		`<div>${properties.Items.map(item => <div x-data="{ value: '${item.Payload}' }"></div>)}</div>`,
+		`<div>${properties.Items.map(item => <button @click="${item.Payload}">Btn</button>)}</div>`,
+		`<div>${properties.Items.map(item => <button hx-on:click="${item.Payload}">Btn</button>)}</div>`,
+		`<div>${properties.Items.map(item => <div style="${item.Payload}"></div>)}</div>`,
+		`<div>${properties.Items.map(item => <script>${item.Payload}</script>)}</div>`,
+		`<div>${properties.Items.map(item => <style>${item.Payload}</style>)}</div>`,
+	}
+
+	for _, tpl := range rejectionTemplates {
+		comp := gossr.Render(tpl, props)
+		output := comp.String()
+		if !strings.Contains(output, "Render Error") || (!strings.Contains(output, "executable attribute") && !strings.Contains(output, "is not allowed inside")) {
+			testRunner.Errorf("Expected render error rejecting map lambda interpolation for template %q, got %q", tpl, output)
+		}
+	}
+
+	urlComp := gossr.Render(`<div>${properties.Items.map(item => <a href="${item.URL}">Link</a>)}</div>`, props)
+	urlOutput := urlComp.String()
+	if !strings.Contains(urlOutput, `href="about:blank"`) {
+		testRunner.Errorf("Expected javascript: URL inside map lambda href to be auto-sanitized to about:blank, got %q", urlOutput)
+	}
+
+	textComp := gossr.Render(`<div>${properties.Items.map(item => <li>${item.Text}</li>)}</div>`, props)
+	textOutput := textComp.String()
+	if !strings.Contains(textOutput, `<li>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;</li>`) && !strings.Contains(textOutput, `<li>&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;</li>`) {
+		testRunner.Errorf("Expected normal HTML text inside map lambda to be HTML escaped, got %q", textOutput)
+	}
+}

@@ -515,6 +515,10 @@ func processScopeArgumentProperties(templateString string, argument any) (string
 }
 
 func processMapItemTemplate(templateString string, variableName string, item any) (string, error) {
+	if err := validateInterpolationSecurityContext(templateString); err != nil {
+		return "", err
+	}
+
 	// Process ternary expressions on variableName: ${variableName.<path> ? "A" : "B"}
 	var err error
 	templateString, err = processTernaryExpressions(templateString, variableName, item)
@@ -711,29 +715,30 @@ func validateInterpolationSecurityContext(templateHtml string) error {
 	for scanIndex < templateHtmlLength {
 		if scanIndex+1 < templateHtmlLength && templateHtml[scanIndex] == '$' && templateHtml[scanIndex+1] == '{' {
 			end := strings.IndexByte(templateHtml[scanIndex+2:], '}')
+			variableName := "..."
 			if end != -1 {
 				endPos := scanIndex + 2 + end
-				variableName := strings.TrimSpace(templateHtml[scanIndex+2 : endPos])
-				if blockContext != "" {
-					if blockContext == "script" {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside <script> blocks.", variableName)
-					} else if blockContext == "style" {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside <style> blocks.", variableName)
-					} else if blockContext == "comment" {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside HTML comments.", variableName)
-					}
-				}
-
-				if inTag && currentAttribute != "" {
-					lowerAttribute := strings.ToLower(currentAttribute)
-					if isExecutableAttribute(lowerAttribute) {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside executable attribute '%s'.", variableName, currentAttribute)
-					}
-				}
-
-				scanIndex = endPos + 1
-				continue
+				variableName = strings.TrimSpace(templateHtml[scanIndex+2 : endPos])
 			}
+			if blockContext != "" {
+				if blockContext == "script" {
+					return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside <script> blocks.", variableName)
+				} else if blockContext == "style" {
+					return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside <style> blocks.", variableName)
+				} else if blockContext == "comment" {
+					return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside HTML comments.", variableName)
+				}
+			}
+
+			if inTag && currentAttribute != "" {
+				lowerAttribute := strings.ToLower(currentAttribute)
+				if isExecutableAttribute(lowerAttribute) {
+					return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside executable attribute '%s'.", variableName, currentAttribute)
+				}
+			}
+
+			scanIndex += 2
+			continue
 		}
 
 		currentChar := templateHtml[scanIndex]
