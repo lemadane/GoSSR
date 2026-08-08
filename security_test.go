@@ -301,4 +301,22 @@ func TestMapLambdaSecurityContextRejectionAndSanitization(testRunner *testing.T)
 	if !strings.Contains(textOutput, `<li>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;</li>`) && !strings.Contains(textOutput, `<li>&lt;script&gt;alert(&#34;x&#34;)&lt;/script&gt;</li>`) {
 		testRunner.Errorf("Expected normal HTML text inside map lambda to be HTML escaped, got %q", textOutput)
 	}
+
+	outerRejectionTemplates := []string{
+		`<script>const items = ${properties.Items.map(item => item)};</script>`,
+		`<style>body { color: ${properties.Items.map(item => item)}; }</style>`,
+		`<!-- ${properties.Items.map(item => item)} -->`,
+		`<button onclick="${properties.Items.map(item => item)}">Click</button>`,
+		`<div x-data="${properties.Items.map(item => item)}"></div>`,
+		`<button @click="${properties.Items.map(item => item)}">Btn</button>`,
+		`<button hx-on:click="${properties.Items.map(item => item)}">Btn</button>`,
+	}
+
+	for _, tpl := range outerRejectionTemplates {
+		comp := gossr.Render(tpl, props)
+		output := comp.String()
+		if !strings.Contains(output, "Render Error") || (!strings.Contains(output, "executable attribute") && !strings.Contains(output, "is not allowed inside")) {
+			testRunner.Errorf("Expected render error rejecting outer map expression for template %q, got %q", tpl, output)
+		}
+	}
 }
