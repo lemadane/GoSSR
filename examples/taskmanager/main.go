@@ -3,22 +3,27 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
+
+	"github.com/lemadane/gossr"
 )
 
+var globalTaskStore = NewTaskStore()
+
 func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
-	sampleTasks := []Task{
-		{ID: "101", Title: "Initialize pure GoSSR engine", Completed: true},
-		{ID: "102", Title: "Integrate HTMX out-of-band updates", Completed: false},
-		{ID: "103", Title: "Attach AlpineJS client interactivity", Completed: false},
-	}
+	allTasks := globalTaskStore.GetAllTasks()
+	stats := globalTaskStore.GetStats()
 
 	taskListComponent := TaskList(TaskListProperties{
-		Title:    "Project Deliverables",
-		TaskList: sampleTasks,
+		Title:       "Task Manager",
+		Tasks:       allTasks,
+		Stats:       stats,
+		SearchQuery: "",
+		FilterTab:   "all",
 	})
 
 	cardWrapperComponent := Card(CardProperties{
-		Title:    "Active Tasks Summary",
+		Title:    "Dashboard Summary",
 		Children: taskListComponent,
 	})
 
@@ -27,7 +32,7 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>GoSSR Task Manager</title>
+	<title>GoSSR Task Manager (AHA Stack)</title>
 	<script src="https://unpkg.com/htmx.org@1.9.10"></script>
 	<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
 	<style>
@@ -39,6 +44,7 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 			--accent-color: #38bdf8;
 			--danger-color: #ef4444;
 			--success-color: #10b981;
+			--warning-color: #f59e0b;
 			--border-color: #334155;
 		}
 
@@ -54,7 +60,7 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 
 		.page-container {
 			width: 100%%;
-			max-width: 720px;
+			max-width: 800px;
 		}
 
 		.page-header h1 {
@@ -71,42 +77,154 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 			box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
 		}
 
-		.card-header {
+		.stats-grid {
+			display: grid;
+			grid-template-columns: repeat(4, 1fr);
+			gap: 1rem;
+			margin-bottom: 1.5rem;
+		}
+
+		.stat-card {
+			background-color: rgba(255, 255, 255, 0.03);
+			border: 1px solid var(--border-color);
+			padding: 1rem;
+			border-radius: 8px;
+			text-align: center;
+		}
+
+		.stat-value {
+			display: block;
+			font-size: 1.5rem;
+			font-weight: 700;
+			color: var(--text-primary);
+		}
+
+		.stat-label {
+			font-size: 0.75rem;
+			color: var(--text-secondary);
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+		}
+
+		.stat-card.completed .stat-value { color: var(--success-color); }
+		.stat-card.pending .stat-value { color: var(--accent-color); }
+		.stat-card.high-priority .stat-value { color: var(--danger-color); }
+
+		.task-form-wrapper {
+			background: rgba(255, 255, 255, 0.02);
+			border: 1px solid var(--border-color);
+			border-radius: 8px;
+			padding: 1rem;
+			margin-bottom: 1.5rem;
+		}
+
+		.form-header {
 			display: flex;
 			justify-content: space-between;
 			align-items: center;
-			margin-bottom: 1rem;
 		}
 
-		.card-header h3 {
+		.form-header h3 {
 			margin: 0;
-			font-size: 1.25rem;
+			font-size: 1.1rem;
 		}
 
-		.button-toggle, .button-delete {
+		.form-group {
+			margin-top: 1rem;
+		}
+
+		.form-group label {
+			display: block;
+			margin-bottom: 0.35rem;
+			font-size: 0.875rem;
+			color: var(--text-secondary);
+		}
+
+		.input-text, .input-search {
+			width: 100%%;
+			box-sizing: border-box;
+			padding: 0.6rem 0.8rem;
+			background-color: var(--background-color);
+			border: 1px solid var(--border-color);
+			border-radius: 6px;
+			color: var(--text-primary);
+			font-size: 0.9rem;
+		}
+
+		.radio-group {
+			display: flex;
+			gap: 1rem;
+		}
+
+		.radio-label {
+			font-size: 0.875rem;
+			cursor: pointer;
+		}
+
+		.button-submit, .button-toggle, .button-toggle-delete, .button-confirm-delete {
 			background: transparent;
 			border: 1px solid var(--border-color);
 			color: var(--text-primary);
-			padding: 0.5rem 1rem;
+			padding: 0.4rem 0.8rem;
 			border-radius: 6px;
 			cursor: pointer;
-			font-size: 0.875rem;
+			font-size: 0.85rem;
 			transition: all 0.2s ease;
 		}
 
-		.button-toggle:hover {
-			border-color: var(--accent-color);
-			color: var(--accent-color);
+		.button-submit {
+			margin-top: 1rem;
+			background-color: var(--accent-color);
+			color: var(--background-color);
+			border: none;
+			font-weight: 600;
 		}
 
-		.button-delete {
+		.button-toggle-delete {
+			border-color: var(--border-color);
+		}
+
+		.button-confirm-delete {
 			border-color: var(--danger-color);
-			color: var(--danger-color);
-		}
-
-		.button-delete:hover {
 			background-color: var(--danger-color);
 			color: white;
+		}
+
+		.search-filter-bar {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			gap: 1rem;
+			margin-bottom: 1.5rem;
+		}
+
+		.search-input-wrapper {
+			flex: 1;
+		}
+
+		.filter-tabs {
+			display: flex;
+			gap: 0.25rem;
+			background: var(--background-color);
+			padding: 0.25rem;
+			border-radius: 6px;
+			border: 1px solid var(--border-color);
+		}
+
+		.filter-tab {
+			background: transparent;
+			border: none;
+			color: var(--text-secondary);
+			padding: 0.35rem 0.75rem;
+			border-radius: 4px;
+			cursor: pointer;
+			font-size: 0.8rem;
+		}
+
+		.filter-tab.active {
+			background-color: var(--card-background);
+			color: var(--accent-color);
+			font-weight: 600;
 		}
 
 		.task-list {
@@ -121,7 +239,6 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 			align-items: center;
 			padding: 0.875rem 1rem;
 			border-bottom: 1px solid var(--border-color);
-			transition: opacity 0.3s ease;
 		}
 
 		.task-item:last-child {
@@ -134,25 +251,20 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 			gap: 0.75rem;
 		}
 
-		.task-badge {
-			font-size: 0.75rem;
-			padding: 0.25rem 0.5rem;
+		.priority-badge {
+			font-size: 0.7rem;
+			padding: 0.2rem 0.5rem;
 			border-radius: 9999px;
-			font-weight: 600;
+			font-weight: 700;
 		}
 
-		.task-item.completed .task-badge {
-			background-color: rgba(16, 185, 129, 0.2);
-			color: var(--success-color);
-		}
+		.priority-badge.HIGH { background: rgba(239, 68, 68, 0.2); color: var(--danger-color); }
+		.priority-badge.MEDIUM { background: rgba(245, 158, 11, 0.2); color: var(--warning-color); }
+		.priority-badge.LOW { background: rgba(16, 185, 129, 0.2); color: var(--success-color); }
 
-		.task-item.pending .task-badge {
-			background-color: rgba(56, 189, 248, 0.2);
-			color: var(--accent-color);
-		}
-
-		.task-title {
-			font-size: 1rem;
+		.task-title.line-through {
+			text-decoration: line-through;
+			color: var(--text-secondary);
 		}
 	</style>
 </head>
@@ -165,18 +277,90 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 	_, _ = responseWriter.Write([]byte(fullHtmlDocument))
 }
 
-func handleDeleteTask(responseWriter http.ResponseWriter, request *http.Request) {
-	if request.Method == http.MethodDelete {
-		responseWriter.WriteHeader(http.StatusOK)
+func handleCreateTask(responseWriter http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(responseWriter, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	_ = request.ParseForm()
+	title := request.FormValue("title")
+	priority := request.FormValue("priority")
+
+	if strings.TrimSpace(title) != "" {
+		globalTaskStore.CreateTask(title, priority, false)
+	}
+
+	allTasks := globalTaskStore.GetAllTasks()
+	stats := globalTaskStore.GetStats()
+
+	taskListComponent := TaskList(TaskListProperties{
+		Title:     "Task Manager",
+		Tasks:     allTasks,
+		Stats:     stats,
+		FilterTab: "all",
+	})
+
+	_ = gossr.RenderHTTP(responseWriter, taskListComponent)
+}
+
+func handleSearchTasks(responseWriter http.ResponseWriter, request *http.Request) {
+	query := request.URL.Query().Get("q")
+	filteredTasks := globalTaskStore.SearchTasks(query, "all")
+	stats := globalTaskStore.GetStats()
+
+	taskListComponent := TaskList(TaskListProperties{
+		Title:       "Task Manager",
+		Tasks:       filteredTasks,
+		Stats:       stats,
+		SearchQuery: query,
+		FilterTab:   "all",
+	})
+
+	_ = gossr.RenderHTTP(responseWriter, taskListComponent)
+}
+
+func handleTaskMutation(responseWriter http.ResponseWriter, request *http.Request) {
+	path := request.URL.Path
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+
+	if len(parts) < 3 {
+		http.Error(responseWriter, "Invalid endpoint path", http.StatusBadRequest)
+		return
+	}
+
+	taskID := parts[2]
+
+	if request.Method == http.MethodDelete {
+		if globalTaskStore.DeleteTask(taskID) {
+			responseWriter.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(responseWriter, request)
+		return
+	}
+
+	if request.Method == http.MethodPut && len(parts) >= 4 && parts[3] == "toggle" {
+		updatedTask, found := globalTaskStore.ToggleTask(taskID)
+		if found {
+			itemComponent := TaskItem(TaskItemProperties{Task: updatedTask})
+			_ = gossr.RenderHTTP(responseWriter, itemComponent)
+			return
+		}
+		http.NotFound(responseWriter, request)
+		return
+	}
+
 	http.Error(responseWriter, "Method not allowed", http.StatusMethodNotAllowed)
 }
 
 func setupRoutes() *http.ServeMux {
+	globalTaskStore = NewTaskStore()
 	serverMux := http.NewServeMux()
 	serverMux.HandleFunc("/tasks", handleTaskPage)
-	serverMux.HandleFunc("/api/tasks/", handleDeleteTask)
+	serverMux.HandleFunc("/api/tasks", handleCreateTask)
+	serverMux.HandleFunc("/api/tasks/search", handleSearchTasks)
+	serverMux.HandleFunc("/api/tasks/", handleTaskMutation)
 	return serverMux
 }
 
