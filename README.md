@@ -26,6 +26,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Role == "ADMIN" ? "checked" : ""}`: Equality comparison ternaries for Checkboxes and Radio Buttons.
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
 - **Strict Mode Validation (`gossr.Strict(true)`)**: Enables development/strict mode where typos in property paths (`${properties.Custmer.Name}`) immediately return a rendering error instead of silently passing unrendered placeholders to production HTML.
+- **Pre-Compiled Template AST (`gossr.MustCompile`)**: Pre-validates security context and compiles template ASTs at initialization time for ultra-fast binding (`.Bind(scope)`) and direct streaming (`.Render(writer, scope)`).
 - **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking across custom tags (`MaxRenderDepth = 100`).
 - **Native HTTP Handlers & Error Propagation**: Serve components directly with `gossr.RenderHTTP(w, comp)` or `gossr.Handler(factoryFn)`, automatically setting `Content-Type: text/html; charset=utf-8` headers and calling a configurable `ErrorHandler` callback (HTTP 500) on render failures.
 - **AHA Stack Native (ASTACK)**: Unescaped integration with **HTMX** out-of-band updates (`hx-delete`, `hx-target`, `hx-swap`) and **Alpine.js** client state (`x-data`, `x-show`, `@click`).
@@ -78,20 +79,21 @@ GoSSR incorporates a multi-layer security architecture and contextual HTML parse
 
 | Security Domain | Protection Mechanism | Status |
 | :--- | :--- | :--- |
-| **Normal Text Escaping** | All plain string interpolations pass through `html.EscapeString` | 🟢 **Fixed** |
-| **Attribute Quote Protection** | Double quote values in attributes are entity-escaped (`&quot;` / `&#34;`) | 🟢 **Fixed** |
-| **URL Protocol Auto-Sanitization** | Plain strings in URL attributes (`href`, `src`, `action`, etc.) with dangerous schemes (`javascript:`, `data:`) sanitize to `about:blank` | 🟢 **Fixed** |
-| **Explicit Trusted Wrappers** | `gossr.Raw(...)` and `gossr.URL(...)` explicitly mark trusted HTML content and sanitized URLs | 🟢 **Implemented** |
-| **Trusted SSR Components** | `gossr.SSR` component return values are preserved as trusted HTML structure | 🟢 **Implemented** |
-| **Dollar Sign (`$`) Preservation** | Pure string builder byte-slicing prevents regex `$1`, `$2` capture group corruption | 🟢 **Fixed** |
-| **Real `.map()` Lambda Execution** | Lambda body expressions (`item => <tag>${item.Val}</tag>`) are evaluated per item | 🟢 **Fixed** |
-| **Arbitrary Property Depth** | Recursive path traversal (`resolvePropertyPath`) supports N-level nested structs/pointers/maps | 🟢 **Fixed** |
-| **Strict Mode Validation** | `gossr.Strict(true)` raises rendering errors on unresolved property paths/typos | 🟢 **Implemented** |
-| **Direct Executable Contexts** | Scanner rejects `${...}` inside `<script>`, `<style>`, `<!-- -->`, `on*`, `style`, Alpine (`x-data`, `@click`), HTMX (`hx-on:*`) | 🟢 **Protected** |
-| **Map Lambda Security Contexts** | Character-by-character scanner enforces security context rules inside `.map(...)` lambdas | 🟢 **Protected** |
-| **Stack Recursion Limit** | Custom component nesting depth tracked across tags (`MaxRenderDepth = 100`) | 🟢 **Protected** |
-| **Production CI Pipeline** | Multi-version matrix (`1.22`-`1.24`), `staticcheck`, `govulncheck`, `-race`, fuzzing, benchmarks | 🟢 **Configured** |
-| **Engine Performance** | Pre-compiled package regexes achieve **6.2 µs/render** and **8.3x speedup** | 🟢 **Optimized** |
+| **Normal Text Escaping** | All plain string interpolations pass through `html.EscapeString` | **Fixed** |
+| **Attribute Quote Protection** | Double quote values in attributes are entity-escaped (`&quot;` / `&#34;`) | **Fixed** |
+| **URL Protocol Auto-Sanitization** | Plain strings in URL attributes (`href`, `src`, `action`, etc.) with dangerous schemes (`javascript:`, `data:`) sanitize to `about:blank` | **Fixed** |
+| **Explicit Trusted Wrappers** | `gossr.Raw(...)` and `gossr.URL(...)` explicitly mark trusted HTML content and sanitized URLs | **Implemented** |
+| **Trusted SSR Components** | `gossr.SSR` component return values are preserved as trusted HTML structure | **Implemented** |
+| **Dollar Sign (`$`) Preservation** | Pure string builder byte-slicing prevents regex `$1`, `$2` capture group corruption | **Fixed** |
+| **Real `.map()` Lambda Execution** | Lambda body expressions (`item => <tag>${item.Val}</tag>`) are evaluated per item | **Fixed** |
+| **Arbitrary Property Depth** | Recursive path traversal (`resolvePropertyPath`) supports N-level nested structs/pointers/maps | **Fixed** |
+| **Strict Mode Validation** | `gossr.Strict(true)` raises rendering errors on unresolved property paths/typos | **Implemented** |
+| **Direct Executable Contexts** | Scanner rejects `${...}` inside `<script>`, `<style>`, `<!-- -->`, `on*`, `style`, Alpine (`x-data`, `@click`), HTMX (`hx-on:*`) | **Protected** |
+| **Map Lambda Security Contexts** | Character-by-character scanner enforces security context rules inside `.map(...)` lambdas | **Protected** |
+| **Pre-Compiled Template AST** | `gossr.MustCompile` pre-validates template security context at `init()` time for ultra-fast binding | **Implemented** |
+| **Stack Recursion Limit** | Custom component nesting depth tracked across tags (`MaxRenderDepth = 100`) | **Protected** |
+| **Production CI Pipeline** | Multi-version matrix (`1.22`-`1.24`), `staticcheck`, `govulncheck`, `-race`, fuzzing, benchmarks | **Configured** |
+| **Engine Performance** | Pre-compiled package regexes achieve **6.2 µs/render** and **8.3x speedup** | **Optimized** |
 
 ---
 
@@ -372,6 +374,16 @@ type SSR interface {
 }
 ```
 
+### `gossr.MustCompile` & `gossr.Compile`
+```go
+type CompiledTemplate struct { ... }
+
+func Compile(templateString string) (CompiledTemplate, error)
+func MustCompile(templateString string) CompiledTemplate
+func (ct CompiledTemplate) Bind(scopeArguments ...any) SSR
+func (ct CompiledTemplate) Render(writer io.Writer, scopeArguments ...any) error
+```
+
 ### `gossr.RenderHTTP` & `gossr.Handler`
 ```go
 func RenderHTTP(w http.ResponseWriter, component SSR) error
@@ -425,9 +437,9 @@ go test -count=1 -v ./...
 === RUN   TestUnicodeAndSpecialCharsInPropertyNamesAndValues
 --- PASS: TestUnicodeAndSpecialCharsInPropertyNamesAndValues (0.00s)
 === RUN   TestVeryLargeSliceMapping
---- PASS: TestVeryLargeSliceMapping (5.10s)
+--- PASS: TestVeryLargeSliceMapping (5.01s)
 === RUN   TestConcurrentRenderingThreadSafety
---- PASS: TestConcurrentRenderingThreadSafety (0.05s)
+--- PASS: TestConcurrentRenderingThreadSafety (0.04s)
 === RUN   TestFormatAndEscapeValueDirectCall
 --- PASS: TestFormatAndEscapeValueDirectCall (0.00s)
 === RUN   TestSimplePropertySubstitution
@@ -456,6 +468,8 @@ go test -count=1 -v ./...
 --- PASS: TestHandlerErrorPropagation (0.00s)
 === RUN   TestStrictModeUnresolvedPropertyError
 --- PASS: TestStrictModeUnresolvedPropertyError (0.00s)
+=== RUN   TestCompiledTemplateAndMustCompile
+--- PASS: TestCompiledTemplateAndMustCompile (0.00s)
 === RUN   TestFormInputAttributeQuoteProtection
 --- PASS: TestFormInputAttributeQuoteProtection (0.00s)
 === RUN   TestCheckboxAndRadioButtonRendering
@@ -494,16 +508,18 @@ go test -count=1 -v ./...
 --- PASS: TestComponentRecursionDepthProtection (0.00s)
 === RUN   TestCustomTagPropsReflectionNoPanic
 --- PASS: TestCustomTagPropsReflectionNoPanic (0.00s)
+=== RUN   TestMapLambdaSecurityContextRejectionAndSanitization
+--- PASS: TestMapLambdaSecurityContextRejectionAndSanitization (0.00s)
 === RUN   FuzzRender
 --- PASS: FuzzRender (0.00s)
 === RUN   FuzzSanitizeUrl
 --- PASS: FuzzSanitizeUrl (0.00s)
 PASS
-ok      github.com/lemadane/gossr       5.151s
+ok      github.com/lemadane/gossr       5.058s
 === RUN   TestE2ETaskPageEndpoint
 --- PASS: TestE2ETaskPageEndpoint (0.01s)
 === RUN   TestE2ECreateTaskEndpoint
---- PASS: TestE2ECreateTaskEndpoint (0.01s)
+--- PASS: TestE2ECreateTaskEndpoint (0.02s)
 === RUN   TestE2EToggleTaskEndpoint
 --- PASS: TestE2EToggleTaskEndpoint (0.00s)
 === RUN   TestE2EDeleteTaskEndpoint
@@ -527,7 +543,7 @@ ok      github.com/lemadane/gossr       5.151s
 === RUN   TestE2ECustomTagReflectionPropsInHttp
 --- PASS: TestE2ECustomTagReflectionPropsInHttp (0.00s)
 PASS
-ok      github.com/lemadane/gossr/examples/taskmanager  0.046s
+ok      github.com/lemadane/gossr/examples/taskmanager  0.049s
 ```
 
 ---
@@ -542,6 +558,14 @@ GoSSR includes a production GitHub Actions CI pipeline ([.github/workflows/ci.ym
 - **Vulnerability Scanning**: `govulncheck ./...` for security advisory checking.
 - **Fuzzing**: Native `go test -fuzz=...` verification.
 - **Benchmark Regression Protection**: `go test -bench=. -benchmem ./...`.
+
+---
+
+## Open Source Governance & Community
+
+- **[SECURITY.md](file:///home/lem/Projects/go/GoSSR/SECURITY.md)**: Vulnerability reporting guidelines and private advisory disclosure process.
+- **[CONTRIBUTING.md](file:///home/lem/Projects/go/GoSSR/CONTRIBUTING.md)**: Guidelines for bug reports, PR standards, allocation constraints, and code style.
+- **[CHANGELOG.md](file:///home/lem/Projects/go/GoSSR/CHANGELOG.md)**: Complete version history and release notes starting from `v0.1.0`.
 
 ---
 

@@ -338,3 +338,36 @@ func TestStrictModeUnresolvedPropertyError(testRunner *testing.T) {
 		testRunner.Errorf("Expected strict mode render error for unresolved property path typo, got %q", output)
 	}
 }
+
+func TestCompiledTemplateAndMustCompile(testRunner *testing.T) {
+	tpl := gossr.MustCompile(`<div>${properties.Name}</div>`)
+
+	type User struct {
+		Name string
+	}
+
+	comp := tpl.Bind(User{Name: "Sarah"})
+	if comp.String() != `<div>Sarah</div>` {
+		testRunner.Errorf("Expected compiled template Bind output '<div>Sarah</div>', got %q", comp.String())
+	}
+
+	var sb strings.Builder
+	if err := tpl.Render(&sb, User{Name: "Alex"}); err != nil {
+		testRunner.Fatalf("Unexpected compiled template Render error: %v", err)
+	}
+	if sb.String() != `<div>Alex</div>` {
+		testRunner.Errorf("Expected compiled template Render output '<div>Alex</div>', got %q", sb.String())
+	}
+
+	_, err := gossr.Compile(`<script>${properties.Val}</script>`)
+	if err == nil {
+		testRunner.Error("Expected Compile to fail on dangerous script block template, got nil error")
+	}
+
+	defer func() {
+		if r := recover(); r == nil {
+			testRunner.Error("Expected MustCompile to panic on dangerous template, got no panic")
+		}
+	}()
+	_ = gossr.MustCompile(`<script>${properties.Val}</script>`)
+}

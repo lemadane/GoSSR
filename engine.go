@@ -227,6 +227,38 @@ func Render(templateString string, scopeArguments ...any) SSR {
 	}
 }
 
+// CompiledTemplate represents a pre-validated, immutable template ready for fast binding.
+type CompiledTemplate struct {
+	rawTemplate string
+}
+
+// Compile pre-validates and compiles a template string into a CompiledTemplate.
+func Compile(templateString string) (CompiledTemplate, error) {
+	if err := validateInterpolationSecurityContext(templateString); err != nil {
+		return CompiledTemplate{}, err
+	}
+	return CompiledTemplate{rawTemplate: templateString}, nil
+}
+
+// MustCompile compiles a template string or panics if compilation fails security validation.
+func MustCompile(templateString string) CompiledTemplate {
+	compiled, err := Compile(templateString)
+	if err != nil {
+		panic(err)
+	}
+	return compiled
+}
+
+// Bind returns an SSR component bound to the compiled template and scope arguments.
+func (compiledTemplate CompiledTemplate) Bind(scopeArguments ...any) SSR {
+	return Render(compiledTemplate.rawTemplate, scopeArguments...)
+}
+
+// Render renders the compiled template directly with scope arguments to an io.Writer.
+func (compiledTemplate CompiledTemplate) Render(writer io.Writer, scopeArguments ...any) error {
+	return Render(compiledTemplate.rawTemplate, scopeArguments...).Render(writer)
+}
+
 func isUrlAttribute(attrName string) bool {
 	lower := strings.ToLower(attrName)
 	return lower == "href" || lower == "src" || lower == "action" || lower == "formaction" ||
