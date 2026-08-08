@@ -173,9 +173,9 @@ func TestE2ESecurityAndDollarPreservation(testRunner *testing.T) {
 		}
 
 		taskListComponent := TaskList(TaskListProperties{
-			Title:    "Adversarial Tasks",
-			Tasks:    adversarialTasks,
-			Stats:    TaskStats{TotalCount: 1},
+			Title: "Adversarial Tasks",
+			Tasks: adversarialTasks,
+			Stats: TaskStats{TotalCount: 1},
 		})
 
 		pageHtml := fmt.Sprintf("<html><body>%s</body></html>", taskListComponent.String())

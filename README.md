@@ -25,6 +25,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Condition ? "OptionA" : "OptionB"}`: Inline ternary conditional evaluation.
   - `${properties.Role == "ADMIN" ? "checked" : ""}`: Equality comparison ternaries for Checkboxes and Radio Buttons.
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
+- **Strict Mode Validation (`gossr.Strict(true)`)**: Enables development/strict mode where typos in property paths (`${properties.Custmer.Name}`) immediately return a rendering error instead of silently passing unrendered placeholders to production HTML.
 - **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking across custom tags (`MaxRenderDepth = 100`).
 - **Native HTTP Handlers & Error Propagation**: Serve components directly with `gossr.RenderHTTP(w, comp)` or `gossr.Handler(factoryFn)`, automatically setting `Content-Type: text/html; charset=utf-8` headers and calling a configurable `ErrorHandler` callback (HTTP 500) on render failures.
 - **AHA Stack Native (ASTACK)**: Unescaped integration with **HTMX** out-of-band updates (`hx-delete`, `hx-target`, `hx-swap`) and **Alpine.js** client state (`x-data`, `x-show`, `@click`).
@@ -386,6 +387,26 @@ go test -count=1 -v ./...
 --- PASS: TestMapFactoryCustomTag (0.00s)
 === RUN   TestDynamicCustomTagAttributeEscaping
 --- PASS: TestDynamicCustomTagAttributeEscaping (0.00s)
+=== RUN   TestRawHtmlOfAndSafeUrlOfAndRegisterTag
+--- PASS: TestRawHtmlOfAndSafeUrlOfAndRegisterTag (0.00s)
+=== RUN   TestDirectWriterRenderingRawHtmlAndSafeUrl
+--- PASS: TestDirectWriterRenderingRawHtmlAndSafeUrl (0.00s)
+=== RUN   TestWriterFailuresInComponentRender
+--- PASS: TestWriterFailuresInComponentRender (0.00s)
+=== RUN   TestTruthinessEvaluationAllTypes
+--- PASS: TestTruthinessEvaluationAllTypes (0.00s)
+=== RUN   TestTernaryInequalityAndUnquoted
+--- PASS: TestTernaryInequalityAndUnquoted (0.00s)
+=== RUN   TestMapAndPointerPropertyResolutionEdgeCases
+--- PASS: TestMapAndPointerPropertyResolutionEdgeCases (0.00s)
+=== RUN   TestUnicodeAndSpecialCharsInPropertyNamesAndValues
+--- PASS: TestUnicodeAndSpecialCharsInPropertyNamesAndValues (0.00s)
+=== RUN   TestVeryLargeSliceMapping
+--- PASS: TestVeryLargeSliceMapping (5.10s)
+=== RUN   TestConcurrentRenderingThreadSafety
+--- PASS: TestConcurrentRenderingThreadSafety (0.05s)
+=== RUN   TestFormatAndEscapeValueDirectCall
+--- PASS: TestFormatAndEscapeValueDirectCall (0.00s)
 === RUN   TestSimplePropertySubstitution
 --- PASS: TestSimplePropertySubstitution (0.00s)
 === RUN   TestNestedPropertySubstitution
@@ -400,12 +421,18 @@ go test -count=1 -v ./...
 --- PASS: TestHTMLEscapingXSS (0.00s)
 === RUN   TestMapDollarSignPreservation
 --- PASS: TestMapDollarSignPreservation (0.00s)
+=== RUN   TestAllDollarSignVariationsInMap
+--- PASS: TestAllDollarSignVariationsInMap (0.00s)
 === RUN   TestRealMapLambdaExecution
 --- PASS: TestRealMapLambdaExecution (0.00s)
+=== RUN   TestMapLambdaWithCustomComponentTag
+--- PASS: TestMapLambdaWithCustomComponentTag (0.00s)
 === RUN   TestArbitraryNestedPropertyDepth
 --- PASS: TestArbitraryNestedPropertyDepth (0.00s)
 === RUN   TestHandlerErrorPropagation
 --- PASS: TestHandlerErrorPropagation (0.00s)
+=== RUN   TestStrictModeUnresolvedPropertyError
+--- PASS: TestStrictModeUnresolvedPropertyError (0.00s)
 === RUN   TestFormInputAttributeQuoteProtection
 --- PASS: TestFormInputAttributeQuoteProtection (0.00s)
 === RUN   TestCheckboxAndRadioButtonRendering
@@ -441,13 +468,17 @@ go test -count=1 -v ./...
 === RUN   TestExecutableAttributeRejectionAlpineAndHTMX
 --- PASS: TestExecutableAttributeRejectionAlpineAndHTMX (0.00s)
 === RUN   TestComponentRecursionDepthProtection
---- PASS: TestComponentRecursionDepthProtection (0.01s)
+--- PASS: TestComponentRecursionDepthProtection (0.00s)
 === RUN   TestCustomTagPropsReflectionNoPanic
 --- PASS: TestCustomTagPropsReflectionNoPanic (0.00s)
+=== RUN   FuzzRender
+--- PASS: FuzzRender (0.00s)
+=== RUN   FuzzSanitizeUrl
+--- PASS: FuzzSanitizeUrl (0.00s)
 PASS
-ok      github.com/lemadane/gossr       0.014s
+ok      github.com/lemadane/gossr       5.151s
 === RUN   TestE2ETaskPageEndpoint
---- PASS: TestE2ETaskPageEndpoint (0.02s)
+--- PASS: TestE2ETaskPageEndpoint (0.01s)
 === RUN   TestE2ECreateTaskEndpoint
 --- PASS: TestE2ECreateTaskEndpoint (0.01s)
 === RUN   TestE2EToggleTaskEndpoint
@@ -455,7 +486,7 @@ ok      github.com/lemadane/gossr       0.014s
 === RUN   TestE2EDeleteTaskEndpoint
 --- PASS: TestE2EDeleteTaskEndpoint (0.00s)
 === RUN   TestE2ESearchEndpoint
---- PASS: TestE2ESearchEndpoint (0.01s)
+--- PASS: TestE2ESearchEndpoint (0.00s)
 === RUN   TestE2ESecurityAndDollarPreservation
 --- PASS: TestE2ESecurityAndDollarPreservation (0.00s)
 === RUN   TestE2EHTTPHandlerAndCustomTags
@@ -467,14 +498,27 @@ ok      github.com/lemadane/gossr       0.014s
 === RUN   TestE2EExecutableAttributeRejectionInHttp
 --- PASS: TestE2EExecutableAttributeRejectionInHttp (0.00s)
 === RUN   TestE2ERecursionProtectionInHttp
---- PASS: TestE2ERecursionProtectionInHttp (0.01s)
+--- PASS: TestE2ERecursionProtectionInHttp (0.00s)
 === RUN   TestE2EDynamicCustomTagEscapingInHttp
 --- PASS: TestE2EDynamicCustomTagEscapingInHttp (0.00s)
 === RUN   TestE2ECustomTagReflectionPropsInHttp
 --- PASS: TestE2ECustomTagReflectionPropsInHttp (0.00s)
 PASS
-ok      github.com/lemadane/gossr/examples/taskmanager  0.057s
+ok      github.com/lemadane/gossr/examples/taskmanager  0.046s
 ```
+
+---
+
+## Continuous Integration & Security Auditing
+
+GoSSR includes a production GitHub Actions CI pipeline ([.github/workflows/ci.yml](file:///home/lem/Projects/go/GoSSR/.github/workflows/ci.yml)) configured for every push and pull request:
+- **Go Version Matrix**: Automated testing across Go `1.22.x`, `1.23.x`, and `1.24.x`.
+- **Race Detection**: `go test -v -race ./...` for data race safety.
+- **Code Formatting & Linting**: Strict `gofmt -l .` and `go vet ./...` checks.
+- **Static Analysis**: `staticcheck ./...` for code quality and correctness.
+- **Vulnerability Scanning**: `govulncheck ./...` for security advisory checking.
+- **Fuzzing**: Native `go test -fuzz=...` verification.
+- **Benchmark Regression Protection**: `go test -bench=. -benchmem ./...`.
 
 ---
 

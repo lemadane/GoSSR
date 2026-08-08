@@ -3,7 +3,7 @@ package main
 import "github.com/lemadane/gossr"
 
 type TaskFormProperties struct {
-	ErrorMessage string
+	ErrorMessage   string
 	SuccessMessage string
 }
 

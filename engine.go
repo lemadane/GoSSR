@@ -63,6 +63,28 @@ func Handler(factory func(request *http.Request) SSR) http.HandlerFunc {
 // MaxRenderDepth defines the maximum allowed component nesting depth before throwing a recursion error.
 const MaxRenderDepth = 100
 
+// StrictMode controls whether unresolved property placeholders (such as typo '${properties.Custmer.Name}')
+// produce a rendering error. Defaults to false for permissive rendering.
+var StrictMode = false
+
+// SetStrict enables or disables strict mode property resolution error checking.
+func SetStrict(strict bool) {
+	StrictMode = strict
+}
+
+// Strict enables or disables strict mode property resolution error checking.
+func Strict(strict bool) {
+	StrictMode = strict
+}
+
+var (
+	mapRegex                    = regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\.map\(([a-zA-Z0-9_]+)\s*=>\s*(.*?)\)\}`)
+	propertyRegex               = regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\}`)
+	genericItemPropertyRegex    = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)(?:\.([a-zA-Z0-9_\.]+))?\}`)
+	genericQuotedTernaryRegex   = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_\.]+)\s*(?:(==|!=)\s*["']?([^"'\s\?]+)["']?)?\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"\}`)
+	genericUnquotedTernaryRegex = regexp.MustCompile(`\$\{([a-zA-Z0-9_]+)\.([a-zA-Z0-9_\.]+)\s*(?:(==|!=)\s*["']?([^"'\s\?]+)["']?)?\s*\?\s*([^:\s\}]+)\s*:\s*([^}\s]+)\}`)
+)
+
 // RawHtml represents trusted unescaped HTML content that should not be HTML-escaped during rendering.
 type RawHtml struct {
 	Value string
@@ -180,7 +202,11 @@ func (component renderComponent) Render(writer io.Writer) error {
 	outputHtml := component.templateString
 
 	for _, argument := range component.scopeArguments {
-		outputHtml = processScopeArgumentProperties(outputHtml, argument)
+		var err error
+		outputHtml, err = processScopeArgumentProperties(outputHtml, argument)
+		if err != nil {
+			return err
+		}
 	}
 
 	processedHtml, err := processCustomComponentTags(outputHtml, component.depth)
@@ -375,13 +401,12 @@ func resolvePropertyPath(root any, path []string) (any, bool) {
 	return current.Interface(), true
 }
 
-func processScopeArgumentProperties(templateString string, argument any) string {
+func processScopeArgumentProperties(templateString string, argument any) (string, error) {
 	if argument == nil {
-		return templateString
+		return templateString, nil
 	}
 
 	// 1. Process map expressions first: ${properties.<path>.map(<variableName> => <bodyExpression>)}
-	mapRegex := regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\.map\(([a-zA-Z0-9_]+)\s*=>\s*(.*?)\)\}`)
 	matches := mapRegex.FindAllStringSubmatchIndex(templateString, -1)
 	if len(matches) > 0 {
 		var sb strings.Builder
@@ -397,6 +422,9 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 			path := strings.Split(pathString, ".")
 			targetValue, found := resolvePropertyPath(argument, path)
 			if !found {
+				if StrictMode {
+					return "", fmt.Errorf("GoSSR strict mode error: unresolved map property path '${properties.%s}'", pathString)
+				}
 				sb.WriteString(templateString[matchStart:matchEnd])
 				lastIndex = matchEnd
 				continue
@@ -419,7 +447,11 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 				item := sliceValue.Index(itemIndex).Interface()
 
 				if strings.Contains(bodyExpression, variablePattern) {
-					renderedItems.WriteString(processMapItemTemplate(bodyExpression, variableName, item))
+					itemHtml, err := processMapItemTemplate(bodyExpression, variableName, item)
+					if err != nil {
+						return "", err
+					}
+					renderedItems.WriteString(itemHtml)
 				} else {
 					if renderableItem, isRenderable := item.(SSR); isRenderable {
 						renderedItems.WriteString(renderableItem.String())
@@ -445,10 +477,13 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 	}
 
 	// 2. Process ternary expressions: ${properties.<path> ? "A" : "B"} or equality ${properties.<path> == "val" ? "A" : "B"}
-	templateString = processTernaryExpressions(templateString, "properties", argument)
+	var err error
+	templateString, err = processTernaryExpressions(templateString, "properties", argument)
+	if err != nil {
+		return "", err
+	}
 
 	// 3. Process direct property placeholders: ${properties.<path>}
-	propertyRegex := regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\}`)
 	propMatches := propertyRegex.FindAllStringSubmatchIndex(templateString, -1)
 	if len(propMatches) > 0 {
 		var sb strings.Builder
@@ -465,6 +500,9 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 				attrContext := getInterpolationAttributeContext(templateString, matchStart)
 				sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
 			} else {
+				if StrictMode {
+					return "", fmt.Errorf("GoSSR strict mode error: unresolved property path '${properties.%s}'", pathString)
+				}
 				sb.WriteString(templateString[matchStart:matchEnd])
 			}
 			lastIndex = matchEnd
@@ -473,29 +511,38 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 		templateString = sb.String()
 	}
 
-	return templateString
+	return templateString, nil
 }
 
-func processMapItemTemplate(templateString string, variableName string, item any) string {
+func processMapItemTemplate(templateString string, variableName string, item any) (string, error) {
 	// Process ternary expressions on variableName: ${variableName.<path> ? "A" : "B"}
-	templateString = processTernaryExpressions(templateString, variableName, item)
+	var err error
+	templateString, err = processTernaryExpressions(templateString, variableName, item)
+	if err != nil {
+		return "", err
+	}
 
 	// Process item property placeholders: ${variableName.<path>} and ${variableName}
-	itemPropertyRegex := regexp.MustCompile(fmt.Sprintf(`\$\{%s(?:\.([a-zA-Z0-9_\.]+))?\}`, regexp.QuoteMeta(variableName)))
-	matches := itemPropertyRegex.FindAllStringSubmatchIndex(templateString, -1)
+	matches := genericItemPropertyRegex.FindAllStringSubmatchIndex(templateString, -1)
 	if len(matches) > 0 {
 		var sb strings.Builder
 		lastIndex := 0
 		for _, loc := range matches {
 			matchStart, matchEnd := loc[0], loc[1]
+
+			varName := templateString[loc[2]:loc[3]]
+			if varName != variableName {
+				continue
+			}
+
 			sb.WriteString(templateString[lastIndex:matchStart])
 
-			if loc[2] == -1 || loc[3] == -1 {
+			if loc[4] == -1 || loc[5] == -1 {
 				// Direct reference ${variableName}
 				attrContext := getInterpolationAttributeContext(templateString, matchStart)
 				sb.WriteString(formatAndEscapeValueForContext(item, attrContext))
 			} else {
-				pathString := templateString[loc[2]:loc[3]]
+				pathString := templateString[loc[4]:loc[5]]
 				path := strings.Split(pathString, ".")
 
 				value, found := resolvePropertyPath(item, path)
@@ -503,6 +550,9 @@ func processMapItemTemplate(templateString string, variableName string, item any
 					attrContext := getInterpolationAttributeContext(templateString, matchStart)
 					sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
 				} else {
+					if StrictMode {
+						return "", fmt.Errorf("GoSSR strict mode error: unresolved property path '${%s.%s}'", variableName, pathString)
+					}
 					sb.WriteString(templateString[matchStart:matchEnd])
 				}
 			}
@@ -512,23 +562,27 @@ func processMapItemTemplate(templateString string, variableName string, item any
 		templateString = sb.String()
 	}
 
-	return templateString
+	return templateString, nil
 }
 
-func processTernaryExpressions(templateString string, prefix string, scope any) string {
+func processTernaryExpressions(templateString string, prefix string, scope any) (string, error) {
+	var strictErr error
+
 	// Quoted ternary with optional comparison operator: ${prefix.path == "val" ? "A" : "B"} or ${prefix.path ? "A" : "B"}
-	quotedRegex := regexp.MustCompile(fmt.Sprintf(`\$\{%s\.([a-zA-Z0-9_\.]+)\s*(?:(==|!=)\s*["']?([^"'\s\?]+)["']?)?\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"\}`, regexp.QuoteMeta(prefix)))
-	templateString = quotedRegex.ReplaceAllStringFunc(templateString, func(match string) string {
-		submatches := quotedRegex.FindStringSubmatch(match)
-		if len(submatches) >= 6 {
-			path := strings.Split(submatches[1], ".")
-			operator := submatches[2]
-			targetValue := submatches[3]
-			trueBranch := submatches[4]
-			falseBranch := submatches[5]
+	templateString = genericQuotedTernaryRegex.ReplaceAllStringFunc(templateString, func(match string) string {
+		submatches := genericQuotedTernaryRegex.FindStringSubmatch(match)
+		if len(submatches) >= 7 && submatches[1] == prefix {
+			path := strings.Split(submatches[2], ".")
+			operator := submatches[3]
+			targetValue := submatches[4]
+			trueBranch := submatches[5]
+			falseBranch := submatches[6]
 
 			value, found := resolvePropertyPath(scope, path)
 			if !found {
+				if StrictMode && strictErr == nil {
+					strictErr = fmt.Errorf("GoSSR strict mode error: unresolved ternary property path '${%s.%s}'", prefix, submatches[2])
+				}
 				return match
 			}
 
@@ -548,20 +602,26 @@ func processTernaryExpressions(templateString string, prefix string, scope any) 
 		}
 		return match
 	})
+
+	if strictErr != nil {
+		return "", strictErr
+	}
 
 	// Unquoted ternary
-	unquotedRegex := regexp.MustCompile(fmt.Sprintf(`\$\{%s\.([a-zA-Z0-9_\.]+)\s*(?:(==|!=)\s*["']?([^"'\s\?]+)["']?)?\s*\?\s*([^:\s\}]+)\s*:\s*([^}\s]+)\}`, regexp.QuoteMeta(prefix)))
-	templateString = unquotedRegex.ReplaceAllStringFunc(templateString, func(match string) string {
-		submatches := unquotedRegex.FindStringSubmatch(match)
-		if len(submatches) >= 6 {
-			path := strings.Split(submatches[1], ".")
-			operator := submatches[2]
-			targetValue := submatches[3]
-			trueBranch := strings.Trim(submatches[4], `"`)
-			falseBranch := strings.Trim(submatches[5], `"`)
+	templateString = genericUnquotedTernaryRegex.ReplaceAllStringFunc(templateString, func(match string) string {
+		submatches := genericUnquotedTernaryRegex.FindStringSubmatch(match)
+		if len(submatches) >= 7 && submatches[1] == prefix {
+			path := strings.Split(submatches[2], ".")
+			operator := submatches[3]
+			targetValue := submatches[4]
+			trueBranch := strings.Trim(submatches[5], `"`)
+			falseBranch := strings.Trim(submatches[6], `"`)
 
 			value, found := resolvePropertyPath(scope, path)
 			if !found {
+				if StrictMode && strictErr == nil {
+					strictErr = fmt.Errorf("GoSSR strict mode error: unresolved ternary property path '${%s.%s}'", prefix, submatches[2])
+				}
 				return match
 			}
 
@@ -582,7 +642,11 @@ func processTernaryExpressions(templateString string, prefix string, scope any) 
 		return match
 	})
 
-	return templateString
+	if strictErr != nil {
+		return "", strictErr
+	}
+
+	return templateString, nil
 }
 
 func evaluateTruthiness(value any) bool {
@@ -1140,4 +1204,3 @@ func instantiateAndRenderComponentFactory(factory any, attributes map[string]str
 
 	return fmt.Sprintf("%v", resultInstance), nil
 }
-

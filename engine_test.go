@@ -156,6 +156,34 @@ func TestMapDollarSignPreservation(testRunner *testing.T) {
 	}
 }
 
+func TestAllDollarSignVariationsInMap(testRunner *testing.T) {
+	type Product struct {
+		Name  string
+		Price string
+	}
+	type Props struct {
+		Products []Product
+	}
+
+	comp := gossr.Render(
+		`<ul>${properties.Products.map(p => <li>${p.Name}: ${p.Price}</li>)}</ul>`,
+		Props{
+			Products: []Product{
+				{Name: "Item $1", Price: "$100 and $1"},
+				{Name: "${product}", Price: "Price: $150"},
+			},
+		},
+	)
+
+	output := comp.String()
+	if !strings.Contains(output, "<li>Item $1: $100 and $1</li>") {
+		testRunner.Errorf("Expected literal $1, $100, $1 preservation in map output, got %q", output)
+	}
+	if !strings.Contains(output, "<li>${product}: Price: $150</li>") {
+		testRunner.Errorf("Expected literal ${product} and Price: $150 in map output, got %q", output)
+	}
+}
+
 func TestRealMapLambdaExecution(testRunner *testing.T) {
 	type Task struct {
 		Title string
@@ -188,6 +216,35 @@ func TestRealMapLambdaExecution(testRunner *testing.T) {
 
 	if !strings.Contains(renderedOutput, `class="pending"`) {
 		testRunner.Errorf("Expected output to contain pending class, got %q", renderedOutput)
+	}
+}
+
+func TestMapLambdaWithCustomComponentTag(testRunner *testing.T) {
+	type User struct {
+		Name string
+		Role string
+	}
+	type Props struct {
+		Users []User
+	}
+
+	gossr.Register("LambdaBadge", UserBadge)
+
+	comp := gossr.Render(
+		`<div class="team">${properties.Users.map(u => <LambdaBadge name="${u.Name}" role="${u.Role}" />)}</div>`,
+		Props{
+			Users: []User{
+				{Name: "Sarah Connor", Role: "Admin"},
+				{Name: "Alex Mercer", Role: "Developer"},
+			},
+		},
+	)
+
+	output := comp.String()
+	expected := `<div class="team"><span class="badge Admin">Sarah Connor (Admin)</span><span class="badge Developer">Alex Mercer (Developer)</span></div>`
+
+	if output != expected {
+		testRunner.Errorf("Expected map lambda to render custom tags %q, got %q", expected, output)
 	}
 }
 
@@ -224,6 +281,31 @@ func TestArbitraryNestedPropertyDepth(testRunner *testing.T) {
 	if renderedOutput != expectedOutput {
 		testRunner.Errorf("Expected 4-level nested property resolution %q, but got %q", expectedOutput, renderedOutput)
 	}
+
+	type SimpleAddress struct {
+		City string
+	}
+	type SimpleCustomer struct {
+		Address SimpleAddress
+	}
+	type ThreeLevelProps struct {
+		Customer SimpleCustomer
+	}
+
+	threeLevelComp := gossr.Render(
+		`<p>${properties.Customer.Address.City}</p>`,
+		ThreeLevelProps{
+			Customer: SimpleCustomer{
+				Address: SimpleAddress{
+					City: "Manila",
+				},
+			},
+		},
+	)
+
+	if threeLevelComp.String() != `<p>Manila</p>` {
+		testRunner.Errorf("Expected 3-level nested property resolution '<p>Manila</p>', got %q", threeLevelComp.String())
+	}
 }
 
 func TestHandlerErrorPropagation(testRunner *testing.T) {
@@ -238,5 +320,21 @@ func TestHandlerErrorPropagation(testRunner *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		testRunner.Errorf("Expected HTTP status 500 Internal Server Error when rendering fails, got %d", rec.Code)
+	}
+}
+
+func TestStrictModeUnresolvedPropertyError(testRunner *testing.T) {
+	gossr.Strict(true)
+	defer gossr.Strict(false)
+
+	type User struct {
+		Name string
+	}
+
+	comp := gossr.Render(`<p>${properties.Custmer.Name}</p>`, User{Name: "Sarah"})
+	output := comp.String()
+
+	if !strings.Contains(output, "Render Error") || !strings.Contains(output, "unresolved property path") {
+		testRunner.Errorf("Expected strict mode render error for unresolved property path typo, got %q", output)
 	}
 }
