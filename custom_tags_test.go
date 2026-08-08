@@ -73,3 +73,27 @@ func TestMapFactoryCustomTag(testRunner *testing.T) {
 		testRunner.Errorf("Expected map factory tag to render output, got %q", output)
 	}
 }
+
+func TestDynamicCustomTagAttributeEscaping(testRunner *testing.T) {
+	gossr.Register("UserBadge", UserBadge)
+
+	type PageProps struct {
+		Name string
+	}
+
+	componentInstance := gossr.Render(
+		`<div><UserBadge name="${properties.Name}" role="Admin" /></div>`,
+		PageProps{Name: "Johnson & Johnson"},
+	)
+
+	output := componentInstance.String()
+
+	expected := `<div><span class="badge Admin">Johnson &amp; Johnson (Admin)</span></div>`
+	if output != expected {
+		testRunner.Errorf("Expected dynamic custom tag prop to single-escape HTML entities %q, got %q", expected, output)
+	}
+
+	if strings.Contains(output, "&amp;amp;") {
+		testRunner.Errorf("Detected double-escaping &amp;amp; in custom tag output: %q", output)
+	}
+}

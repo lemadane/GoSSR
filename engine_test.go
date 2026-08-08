@@ -1,6 +1,8 @@
 package gossr_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -221,5 +223,20 @@ func TestArbitraryNestedPropertyDepth(testRunner *testing.T) {
 
 	if renderedOutput != expectedOutput {
 		testRunner.Errorf("Expected 4-level nested property resolution %q, but got %q", expectedOutput, renderedOutput)
+	}
+}
+
+func TestHandlerErrorPropagation(testRunner *testing.T) {
+	handler := gossr.Handler(func(req *http.Request) gossr.SSR {
+		return gossr.Render(`<script>${properties.Val}</script>`, struct{ Val string }{Val: "unsafe"})
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/error-test", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		testRunner.Errorf("Expected HTTP status 500 Internal Server Error when rendering fails, got %d", rec.Code)
 	}
 }

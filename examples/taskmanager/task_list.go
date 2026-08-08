@@ -29,7 +29,7 @@ func TaskList(properties TaskListProperties) gossr.SSR {
 	}
 
 	return gossr.Render(`
-		<div id="task-list-container" class="page-container" x-data="{ currentFilter: '${properties.FilterTab}' }">
+		<div id="task-list-container" class="page-container" data-filter="${properties.FilterTab}" x-data="{ currentFilter: $el.dataset.filter }">
 			<header class="page-header">
 				<h1>${properties.Title}</h1>
 			</header>

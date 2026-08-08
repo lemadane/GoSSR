@@ -146,3 +146,110 @@ func TestNilPropertyHandling(testRunner *testing.T) {
 		testRunner.Errorf("Expected nil property to render empty string '<span></span>', got %q", output)
 	}
 }
+
+func TestNormalStringInUrlAttributeAutoSanitized(testRunner *testing.T) {
+	type Props struct {
+		DangerousHref string
+		DangerousSrc  string
+		NormalUrl     string
+		TrustedRaw    gossr.RawHtml
+	}
+
+	comp := gossr.Render(
+		`<a href="${properties.DangerousHref}">Link</a>`+
+			`<img src="${properties.DangerousSrc}" />`+
+			`<a href="${properties.NormalUrl}">Normal</a>`+
+			`<a href="${properties.TrustedRaw}">Trusted</a>`,
+		Props{
+			DangerousHref: "javascript:alert(1)",
+			DangerousSrc:  "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+			NormalUrl:     "https://example.com/profile",
+			TrustedRaw:    gossr.Raw("javascript:trustedFunction()"),
+		},
+	)
+
+	output := comp.String()
+
+	if !strings.Contains(output, `href="about:blank"`) {
+		testRunner.Errorf("Expected plain string javascript: URL in href attribute to be auto-sanitized to about:blank, got %q", output)
+	}
+
+	if !strings.Contains(output, `src="about:blank"`) {
+		testRunner.Errorf("Expected plain string data: URL in src attribute to be auto-sanitized to about:blank, got %q", output)
+	}
+
+	if !strings.Contains(output, `href="https://example.com/profile"`) {
+		testRunner.Errorf("Expected normal HTTPS URL in href attribute to be preserved, got %q", output)
+	}
+
+	if !strings.Contains(output, `href="javascript:trustedFunction()"`) {
+		testRunner.Errorf("Expected explicit RawHtml wrapper to bypass auto-sanitization, got %q", output)
+	}
+}
+
+func TestExecutableAttributeRejectionAlpineAndHTMX(testRunner *testing.T) {
+	type Props struct {
+		Val string
+	}
+
+	executableAttrTemplates := []string{
+		`<div x-data="{ name: '${properties.Val}' }"></div>`,
+		`<button @click="${properties.Val}">Btn</button>`,
+		`<div x-init="${properties.Val}"></div>`,
+		`<button hx-on:click="${properties.Val}">Btn</button>`,
+		`<div hx-vals="${properties.Val}"></div>`,
+		`<div :class="${properties.Val}"></div>`,
+	}
+
+	for _, tpl := range executableAttrTemplates {
+		comp := gossr.Render(tpl, Props{Val: "test"})
+		output := comp.String()
+
+		if !strings.Contains(output, "Render Error") || !strings.Contains(output, "executable attribute") {
+			testRunner.Errorf("Expected render error rejecting interpolation inside executable attribute for template %q, got %q", tpl, output)
+		}
+	}
+}
+
+type RecursiveTagProps struct {
+	Depth int
+}
+
+func TestComponentRecursionDepthProtection(testRunner *testing.T) {
+	gossr.Register("RecursiveLoopComponent", func(props RecursiveTagProps) gossr.SSR {
+		return gossr.Render(`<RecursiveLoopComponent depth="${properties.Depth}" />`, props)
+	})
+
+	comp := gossr.Render(`<RecursiveLoopComponent depth="1" />`)
+	output := comp.String()
+
+	if !strings.Contains(output, "Render Error") || !strings.Contains(output, "recursion limit exceeded") {
+		testRunner.Errorf("Expected render error indicating recursion limit exceeded, got %q", output)
+	}
+}
+
+type SafeLinkComponentProps struct {
+	Url  gossr.SafeUrl
+	Body gossr.RawHtml
+}
+
+func TestCustomTagPropsReflectionNoPanic(testRunner *testing.T) {
+	gossr.Register("SafeCustomLink", func(props SafeLinkComponentProps) gossr.SSR {
+		return gossr.Render(`<a href="${properties.Url}">${properties.Body}</a>`, props)
+	})
+
+	comp := gossr.Render(`<SafeCustomLink url="javascript:alert(1)" body="<b>Click me</b>" />`)
+	output := comp.String()
+
+	if strings.Contains(output, "Render Error") {
+		testRunner.Fatalf("Expected custom tag with SafeUrl and RawHtml props to render without error, got %q", output)
+	}
+
+	if !strings.Contains(output, `href="about:blank"`) {
+		testRunner.Errorf("Expected SafeUrl field on custom tag props to sanitize dangerous URL to about:blank, got %q", output)
+	}
+
+	if !strings.Contains(output, `<b>Click me</b>`) {
+		testRunner.Errorf("Expected RawHtml field on custom tag props to output unescaped HTML, got %q", output)
+	}
+}

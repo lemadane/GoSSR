@@ -30,10 +30,21 @@ func UnescapeHTML(input string) string {
 // RenderHTTP sets the Content-Type header to text/html; charset=utf-8 if not already set,
 // and renders the SSR component directly to the http.ResponseWriter.
 func RenderHTTP(responseWriter http.ResponseWriter, component SSR) error {
+	if component == nil {
+		return fmt.Errorf("cannot render nil SSR component")
+	}
 	if responseWriter.Header().Get("Content-Type") == "" {
 		responseWriter.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
 	return component.Render(responseWriter)
+}
+
+// ErrorHandler is invoked when RenderHTTP fails inside Handler.
+// It defaults to writing HTTP 500 Internal Server Error.
+var ErrorHandler = func(responseWriter http.ResponseWriter, request *http.Request, err error) {
+	if responseWriter != nil {
+		http.Error(responseWriter, "Internal Server Error", http.StatusInternalServerError)
+	}
 }
 
 // Handler constructs an http.HandlerFunc from a component factory function.
@@ -41,7 +52,10 @@ func Handler(factory func(request *http.Request) SSR) http.HandlerFunc {
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		componentInstance := factory(request)
 		if componentInstance != nil {
-			_ = RenderHTTP(responseWriter, componentInstance)
+			err := RenderHTTP(responseWriter, componentInstance)
+			if err != nil && ErrorHandler != nil {
+				ErrorHandler(responseWriter, request, err)
+			}
 		}
 	}
 }
@@ -187,7 +201,103 @@ func Render(templateString string, scopeArguments ...any) SSR {
 	}
 }
 
-func formatAndEscapeValue(value any) string {
+func isUrlAttribute(attrName string) bool {
+	lower := strings.ToLower(attrName)
+	return lower == "href" || lower == "src" || lower == "action" || lower == "formaction" ||
+		lower == "cite" || lower == "data" || lower == "poster" || lower == "icon"
+}
+
+func getInterpolationAttributeContext(templateHtml string, matchIndex int) string {
+	templateLength := len(templateHtml)
+	if matchIndex > templateLength {
+		matchIndex = templateLength
+	}
+
+	inTag := false
+	var quoteChar byte = 0
+	currentAttribute := ""
+	var attributeBuffer strings.Builder
+	blockContext := ""
+
+	for scanIndex := 0; scanIndex < matchIndex; scanIndex++ {
+		if blockContext == "comment" {
+			if scanIndex+2 < templateLength && strings.HasPrefix(templateHtml[scanIndex:], "-->") {
+				scanIndex += 2
+				blockContext = ""
+				continue
+			}
+		} else if blockContext == "script" {
+			if scanIndex+8 < templateLength && strings.ToLower(templateHtml[scanIndex:scanIndex+9]) == "</script>" {
+				scanIndex += 8
+				blockContext = ""
+				continue
+			}
+		} else if blockContext == "style" {
+			if scanIndex+7 < templateLength && strings.ToLower(templateHtml[scanIndex:scanIndex+8]) == "</style>" {
+				scanIndex += 7
+				blockContext = ""
+				continue
+			}
+		} else {
+			currentChar := templateHtml[scanIndex]
+			if currentChar == '<' {
+				if scanIndex+3 < templateLength && strings.HasPrefix(templateHtml[scanIndex:], "<!--") {
+					blockContext = "comment"
+				} else if scanIndex+6 < templateLength && strings.HasPrefix(strings.ToLower(templateHtml[scanIndex:]), "<script") {
+					nextByte := byte('>')
+					if scanIndex+7 < templateLength {
+						nextByte = templateHtml[scanIndex+7]
+					}
+					if isWhitespaceCharacter(nextByte) || nextByte == '>' {
+						blockContext = "script"
+					}
+				} else if scanIndex+5 < templateLength && strings.HasPrefix(strings.ToLower(templateHtml[scanIndex:]), "<style") {
+					nextByte := byte('>')
+					if scanIndex+6 < templateLength {
+						nextByte = templateHtml[scanIndex+6]
+					}
+					if isWhitespaceCharacter(nextByte) || nextByte == '>' {
+						blockContext = "style"
+					}
+				}
+				inTag = true
+				currentAttribute = ""
+				attributeBuffer.Reset()
+			} else if inTag {
+				if quoteChar != 0 {
+					if currentChar == quoteChar {
+						quoteChar = 0
+						currentAttribute = ""
+						attributeBuffer.Reset()
+					}
+				} else {
+					if currentChar == '"' || currentChar == '\'' {
+						quoteChar = currentChar
+						currentAttribute = strings.TrimSpace(attributeBuffer.String())
+					} else if currentChar == '=' {
+						currentAttribute = strings.TrimSpace(attributeBuffer.String())
+					} else if currentChar == '>' {
+						inTag = false
+						quoteChar = 0
+						currentAttribute = ""
+						attributeBuffer.Reset()
+					} else if isWhitespaceCharacter(currentChar) {
+						attributeBuffer.Reset()
+					} else {
+						attributeBuffer.WriteByte(currentChar)
+					}
+				}
+			}
+		}
+	}
+
+	if inTag && currentAttribute != "" {
+		return currentAttribute
+	}
+	return ""
+}
+
+func formatAndEscapeValueForContext(value any, attrContext string) string {
 	if value == nil {
 		return ""
 	}
@@ -205,12 +315,21 @@ func formatAndEscapeValue(value any) string {
 		var stringBuilder strings.Builder
 		for itemIndex := 0; itemIndex < reflectionValue.Len(); itemIndex++ {
 			item := reflectionValue.Index(itemIndex).Interface()
-			stringBuilder.WriteString(formatAndEscapeValue(item))
+			stringBuilder.WriteString(formatAndEscapeValueForContext(item, attrContext))
 		}
 		return stringBuilder.String()
 	}
 
-	return html.EscapeString(fmt.Sprintf("%v", value))
+	valStr := fmt.Sprintf("%v", value)
+	if isUrlAttribute(attrContext) {
+		return html.EscapeString(SanitizeUrl(valStr))
+	}
+
+	return html.EscapeString(valStr)
+}
+
+func formatAndEscapeValue(value any) string {
+	return formatAndEscapeValueForContext(value, "")
 }
 
 func resolvePropertyPath(root any, path []string) (any, bool) {
@@ -263,73 +382,96 @@ func processScopeArgumentProperties(templateString string, argument any) string 
 
 	// 1. Process map expressions first: ${properties.<path>.map(<variableName> => <bodyExpression>)}
 	mapRegex := regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\.map\(([a-zA-Z0-9_]+)\s*=>\s*(.*?)\)\}`)
-	templateString = mapRegex.ReplaceAllStringFunc(templateString, func(match string) string {
-		submatches := mapRegex.FindStringSubmatch(match)
-		if len(submatches) < 4 {
-			return match
-		}
+	matches := mapRegex.FindAllStringSubmatchIndex(templateString, -1)
+	if len(matches) > 0 {
+		var sb strings.Builder
+		lastIndex := 0
+		for _, loc := range matches {
+			matchStart, matchEnd := loc[0], loc[1]
+			sb.WriteString(templateString[lastIndex:matchStart])
 
-		pathString := submatches[1]
-		variableName := submatches[2]
-		bodyExpression := submatches[3]
+			pathString := templateString[loc[2]:loc[3]]
+			variableName := templateString[loc[4]:loc[5]]
+			bodyExpression := templateString[loc[6]:loc[7]]
 
-		path := strings.Split(pathString, ".")
-		targetValue, found := resolvePropertyPath(argument, path)
-		if !found {
-			return match
-		}
+			path := strings.Split(pathString, ".")
+			targetValue, found := resolvePropertyPath(argument, path)
+			if !found {
+				sb.WriteString(templateString[matchStart:matchEnd])
+				lastIndex = matchEnd
+				continue
+			}
 
-		sliceValue := reflect.ValueOf(targetValue)
-		if sliceValue.Kind() == reflect.Pointer {
-			sliceValue = sliceValue.Elem()
-		}
-		if sliceValue.Kind() != reflect.Slice && sliceValue.Kind() != reflect.Array {
-			return match
-		}
+			sliceValue := reflect.ValueOf(targetValue)
+			if sliceValue.Kind() == reflect.Pointer {
+				sliceValue = sliceValue.Elem()
+			}
+			if sliceValue.Kind() != reflect.Slice && sliceValue.Kind() != reflect.Array {
+				sb.WriteString(templateString[matchStart:matchEnd])
+				lastIndex = matchEnd
+				continue
+			}
 
-		var renderedItems strings.Builder
-		variablePattern := "${" + variableName
+			var renderedItems strings.Builder
+			variablePattern := "${" + variableName
 
-		for itemIndex := 0; itemIndex < sliceValue.Len(); itemIndex++ {
-			item := sliceValue.Index(itemIndex).Interface()
+			for itemIndex := 0; itemIndex < sliceValue.Len(); itemIndex++ {
+				item := sliceValue.Index(itemIndex).Interface()
 
-			if strings.Contains(bodyExpression, variablePattern) {
-				renderedItems.WriteString(processMapItemTemplate(bodyExpression, variableName, item))
-			} else {
-				if renderableItem, isRenderable := item.(SSR); isRenderable {
-					renderedItems.WriteString(renderableItem.String())
-				} else if stringerItem, isStringer := item.(fmt.Stringer); isStringer {
-					renderedItems.WriteString(html.EscapeString(stringerItem.String()))
+				if strings.Contains(bodyExpression, variablePattern) {
+					renderedItems.WriteString(processMapItemTemplate(bodyExpression, variableName, item))
 				} else {
-					renderedItems.WriteString(formatAndEscapeValue(item))
+					if renderableItem, isRenderable := item.(SSR); isRenderable {
+						renderedItems.WriteString(renderableItem.String())
+					} else if stringerItem, isStringer := item.(fmt.Stringer); isStringer {
+						attrContext := getInterpolationAttributeContext(templateString, matchStart)
+						if isUrlAttribute(attrContext) {
+							renderedItems.WriteString(html.EscapeString(SanitizeUrl(stringerItem.String())))
+						} else {
+							renderedItems.WriteString(html.EscapeString(stringerItem.String()))
+						}
+					} else {
+						attrContext := getInterpolationAttributeContext(templateString, matchStart)
+						renderedItems.WriteString(formatAndEscapeValueForContext(item, attrContext))
+					}
 				}
 			}
-		}
 
-		return renderedItems.String()
-	})
+			sb.WriteString(renderedItems.String())
+			lastIndex = matchEnd
+		}
+		sb.WriteString(templateString[lastIndex:])
+		templateString = sb.String()
+	}
 
 	// 2. Process ternary expressions: ${properties.<path> ? "A" : "B"} or equality ${properties.<path> == "val" ? "A" : "B"}
 	templateString = processTernaryExpressions(templateString, "properties", argument)
 
 	// 3. Process direct property placeholders: ${properties.<path>}
 	propertyRegex := regexp.MustCompile(`\$\{properties\.([a-zA-Z0-9_\.]+)\}`)
-	templateString = propertyRegex.ReplaceAllStringFunc(templateString, func(match string) string {
-		submatches := propertyRegex.FindStringSubmatch(match)
-		if len(submatches) < 2 {
-			return match
+	propMatches := propertyRegex.FindAllStringSubmatchIndex(templateString, -1)
+	if len(propMatches) > 0 {
+		var sb strings.Builder
+		lastIndex := 0
+		for _, loc := range propMatches {
+			matchStart, matchEnd := loc[0], loc[1]
+			sb.WriteString(templateString[lastIndex:matchStart])
+
+			pathString := templateString[loc[2]:loc[3]]
+			path := strings.Split(pathString, ".")
+
+			value, found := resolvePropertyPath(argument, path)
+			if found {
+				attrContext := getInterpolationAttributeContext(templateString, matchStart)
+				sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
+			} else {
+				sb.WriteString(templateString[matchStart:matchEnd])
+			}
+			lastIndex = matchEnd
 		}
-
-		pathString := submatches[1]
-		path := strings.Split(pathString, ".")
-
-		value, found := resolvePropertyPath(argument, path)
-		if !found {
-			return match
-		}
-
-		return formatAndEscapeValue(value)
-	})
+		sb.WriteString(templateString[lastIndex:])
+		templateString = sb.String()
+	}
 
 	return templateString
 }
@@ -340,27 +482,35 @@ func processMapItemTemplate(templateString string, variableName string, item any
 
 	// Process item property placeholders: ${variableName.<path>} and ${variableName}
 	itemPropertyRegex := regexp.MustCompile(fmt.Sprintf(`\$\{%s(?:\.([a-zA-Z0-9_\.]+))?\}`, regexp.QuoteMeta(variableName)))
-	templateString = itemPropertyRegex.ReplaceAllStringFunc(templateString, func(match string) string {
-		submatches := itemPropertyRegex.FindStringSubmatch(match)
-		if len(submatches) < 1 {
-			return match
+	matches := itemPropertyRegex.FindAllStringSubmatchIndex(templateString, -1)
+	if len(matches) > 0 {
+		var sb strings.Builder
+		lastIndex := 0
+		for _, loc := range matches {
+			matchStart, matchEnd := loc[0], loc[1]
+			sb.WriteString(templateString[lastIndex:matchStart])
+
+			if loc[2] == -1 || loc[3] == -1 {
+				// Direct reference ${variableName}
+				attrContext := getInterpolationAttributeContext(templateString, matchStart)
+				sb.WriteString(formatAndEscapeValueForContext(item, attrContext))
+			} else {
+				pathString := templateString[loc[2]:loc[3]]
+				path := strings.Split(pathString, ".")
+
+				value, found := resolvePropertyPath(item, path)
+				if found {
+					attrContext := getInterpolationAttributeContext(templateString, matchStart)
+					sb.WriteString(formatAndEscapeValueForContext(value, attrContext))
+				} else {
+					sb.WriteString(templateString[matchStart:matchEnd])
+				}
+			}
+			lastIndex = matchEnd
 		}
-
-		if submatches[1] == "" {
-			// Direct reference ${variableName}
-			return formatAndEscapeValue(item)
-		}
-
-		pathString := submatches[1]
-		path := strings.Split(pathString, ".")
-
-		value, found := resolvePropertyPath(item, path)
-		if !found {
-			return match
-		}
-
-		return formatAndEscapeValue(value)
-	})
+		sb.WriteString(templateString[lastIndex:])
+		templateString = sb.String()
+	}
 
 	return templateString
 }
@@ -464,6 +614,26 @@ func evaluateTruthiness(value any) bool {
 	}
 }
 
+func isExecutableAttribute(lowerAttr string) bool {
+	if strings.HasPrefix(lowerAttr, "on") || lowerAttr == "style" {
+		return true
+	}
+	// Alpine.js directives
+	if lowerAttr == "x-data" || lowerAttr == "x-init" || lowerAttr == "x-effect" ||
+		lowerAttr == "x-show" || lowerAttr == "x-text" || lowerAttr == "x-html" ||
+		lowerAttr == "x-if" || lowerAttr == "x-for" || lowerAttr == "x-model" ||
+		strings.HasPrefix(lowerAttr, "x-on:") || strings.HasPrefix(lowerAttr, "@") ||
+		strings.HasPrefix(lowerAttr, "x-bind:") || (strings.HasPrefix(lowerAttr, ":") && lowerAttr != ":") {
+		return true
+	}
+	// HTMX executable attributes
+	if strings.HasPrefix(lowerAttr, "hx-on:") || strings.HasPrefix(lowerAttr, "hx-on::") ||
+		lowerAttr == "hx-vals" || lowerAttr == "hx-headers" || lowerAttr == "hx-vars" {
+		return true
+	}
+	return false
+}
+
 func validateInterpolationSecurityContext(templateHtml string) error {
 	templateHtmlLength := len(templateHtml)
 	scanIndex := 0
@@ -492,10 +662,8 @@ func validateInterpolationSecurityContext(templateHtml string) error {
 
 				if inTag && currentAttribute != "" {
 					lowerAttribute := strings.ToLower(currentAttribute)
-					if strings.HasPrefix(lowerAttribute, "on") {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside inline event handler attribute '%s'.", variableName, currentAttribute)
-					} else if lowerAttribute == "style" {
-						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside inline style attribute 'style'.", variableName)
+					if isExecutableAttribute(lowerAttribute) {
+						return fmt.Errorf("GoSSR interpolation ${%s} is not allowed inside executable attribute '%s'.", variableName, currentAttribute)
 					}
 				}
 
@@ -707,7 +875,7 @@ func processCustomComponentTags(templateHtml string, currentDepth int) (string, 
 								nextIndex = matchingClose + len("</"+tagName+">")
 							}
 
-							renderedChild, err := instantiateAndRenderComponentFactory(factory, attributes)
+							renderedChild, err := instantiateAndRenderComponentFactory(factory, attributes, currentDepth+1)
 							if err != nil {
 								return "", fmt.Errorf("Error rendering component tag <%s>: %w", tagName, err)
 							}
@@ -796,7 +964,7 @@ func parseCustomTagAttributes(attributeString string) map[string]string {
 			value = "true"
 		}
 
-		attributes[key] = value
+		attributes[key] = html.UnescapeString(value)
 	}
 	return attributes
 }
@@ -858,7 +1026,11 @@ func findMatchingClosingComponentTag(templateHtml string, searchFrom int, tagNam
 	return -1
 }
 
-func instantiateAndRenderComponentFactory(factory any, attributes map[string]string) (string, error) {
+func instantiateAndRenderComponentFactory(factory any, attributes map[string]string, currentDepth int) (string, error) {
+	if currentDepth > MaxRenderDepth {
+		return "", fmt.Errorf("GoSSR component recursion limit exceeded (max depth %d)", MaxRenderDepth)
+	}
+
 	factoryValue := reflect.ValueOf(factory)
 	if !factoryValue.IsValid() {
 		return "", fmt.Errorf("invalid component factory")
@@ -924,8 +1096,15 @@ func instantiateAndRenderComponentFactory(factory any, attributes map[string]str
 					fmt.Sscanf(attributeValue, "%d", &integerValue)
 					field.SetInt(integerValue)
 				case reflect.Struct, reflect.Interface:
-					if field.Type() == reflect.TypeOf(RawHtml{}) || field.Type().Implements(reflect.TypeOf((*SSR)(nil)).Elem()) {
-						field.Set(reflect.ValueOf(Raw(attributeValue)))
+					rawVal := reflect.ValueOf(Raw(attributeValue))
+					safeUrlVal := reflect.ValueOf(URL(attributeValue))
+
+					if field.Type() == reflect.TypeOf(RawHtml{}) {
+						field.Set(rawVal)
+					} else if field.Type() == reflect.TypeOf(SafeUrl{}) {
+						field.Set(safeUrlVal)
+					} else if rawVal.Type().AssignableTo(field.Type()) {
+						field.Set(rawVal)
 					}
 				}
 			}
@@ -942,8 +1121,19 @@ func instantiateAndRenderComponentFactory(factory any, attributes map[string]str
 	}
 
 	resultInstance := results[0].Interface()
-	if ssr, isSSR := resultInstance.(SSR); isSSR {
-		return ssr.String(), nil
+	if rc, isRenderComponent := resultInstance.(renderComponent); isRenderComponent {
+		rc.depth = currentDepth
+		var stringBuilder strings.Builder
+		if err := rc.Render(&stringBuilder); err != nil {
+			return "", err
+		}
+		return stringBuilder.String(), nil
+	} else if ssr, isSSR := resultInstance.(SSR); isSSR {
+		var stringBuilder strings.Builder
+		if err := ssr.Render(&stringBuilder); err != nil {
+			return "", err
+		}
+		return stringBuilder.String(), nil
 	} else if str, isStr := resultInstance.(string); isStr {
 		return str, nil
 	}

@@ -301,3 +301,181 @@ func TestE2EFormControlsCheckboxesRadio(testRunner *testing.T) {
 		testRunner.Errorf("Expected ADMIN radio button checked attribute, got %q", body)
 	}
 }
+
+func TestE2EUrlAutoSanitizationInHttp(testRunner *testing.T) {
+	type PageProperties struct {
+		DangerousHref string
+		DangerousSrc  string
+		NormalUrl     string
+	}
+
+	serverMux := http.NewServeMux()
+	serverMux.HandleFunc("/url-test", gossr.Handler(func(request *http.Request) gossr.SSR {
+		return gossr.Render(
+			`<a id="dangerous-link" href="${properties.DangerousHref}">Link</a>`+
+				`<img id="dangerous-img" src="${properties.DangerousSrc}" />`+
+				`<a id="normal-link" href="${properties.NormalUrl}">Normal</a>`,
+			PageProperties{
+				DangerousHref: "javascript:alert('xss')",
+				DangerousSrc:  "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+				NormalUrl:     "https://example.com/dashboard",
+			},
+		)
+	}))
+
+	testServer := httptest.NewServer(serverMux)
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/url-test")
+	if err != nil {
+		testRunner.Fatalf("Failed GET request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		testRunner.Errorf("Expected 200 OK, got %d", response.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(response.Body)
+	if err != nil {
+		testRunner.Fatalf("Failed reading body: %v", err)
+	}
+
+	body := string(bodyBytes)
+	if !strings.Contains(body, `href="about:blank"`) {
+		testRunner.Errorf("Expected E2E HTTP response to sanitize dangerous href to about:blank, got %q", body)
+	}
+	if !strings.Contains(body, `src="about:blank"`) {
+		testRunner.Errorf("Expected E2E HTTP response to sanitize dangerous src to about:blank, got %q", body)
+	}
+	if !strings.Contains(body, `href="https://example.com/dashboard"`) {
+		testRunner.Errorf("Expected E2E HTTP response to preserve valid HTTPS URL, got %q", body)
+	}
+}
+
+func TestE2EExecutableAttributeRejectionInHttp(testRunner *testing.T) {
+	serverMux := http.NewServeMux()
+	serverMux.HandleFunc("/executable-attr-test", gossr.Handler(func(request *http.Request) gossr.SSR {
+		return gossr.Render(`<div x-data="{ user: '${properties.User}' }"></div>`, struct{ User string }{User: "admin"})
+	}))
+
+	testServer := httptest.NewServer(serverMux)
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/executable-attr-test")
+	if err != nil {
+		testRunner.Fatalf("Failed GET request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusInternalServerError {
+		testRunner.Errorf("Expected 500 Internal Server Error when rendering component with executable attribute interpolation, got %d", response.StatusCode)
+	}
+}
+
+type E2ERecursiveProps struct {
+	Count int
+}
+
+func TestE2ERecursionProtectionInHttp(testRunner *testing.T) {
+	gossr.Register("E2ERecursiveTag", func(props E2ERecursiveProps) gossr.SSR {
+		return gossr.Render(`<E2ERecursiveTag count="${properties.Count}" />`, props)
+	})
+
+	serverMux := http.NewServeMux()
+	serverMux.HandleFunc("/recursion-test", gossr.Handler(func(request *http.Request) gossr.SSR {
+		return gossr.Render(`<E2ERecursiveTag count="1" />`)
+	}))
+
+	testServer := httptest.NewServer(serverMux)
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/recursion-test")
+	if err != nil {
+		testRunner.Fatalf("Failed GET request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusInternalServerError {
+		testRunner.Errorf("Expected 500 Internal Server Error when rendering recursive tag exceeding depth limit, got %d", response.StatusCode)
+	}
+}
+
+func TestE2EDynamicCustomTagEscapingInHttp(testRunner *testing.T) {
+	type E2EBadgeProps struct {
+		Username string
+	}
+
+	gossr.Register("E2EUserBadge", func(props E2EBadgeProps) gossr.SSR {
+		return gossr.Render(`<span class="badge">${properties.Username}</span>`, props)
+	})
+
+	serverMux := http.NewServeMux()
+	serverMux.HandleFunc("/dynamic-tag-test", gossr.Handler(func(request *http.Request) gossr.SSR {
+		return gossr.Render(`<E2EUserBadge username="${properties.Name}" />`, struct{ Name string }{Name: "AT&T & Verizon"})
+	}))
+
+	testServer := httptest.NewServer(serverMux)
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/dynamic-tag-test")
+	if err != nil {
+		testRunner.Fatalf("Failed GET request: %v", err)
+	}
+	defer response.Body.Close()
+
+	bodyBytes, err := io.ReadAll(response.Body)
+	if err != nil {
+		testRunner.Fatalf("Failed reading body: %v", err)
+	}
+
+	body := string(bodyBytes)
+	if !strings.Contains(body, `<span class="badge">AT&amp;T &amp; Verizon</span>`) {
+		testRunner.Errorf("Expected dynamic custom tag prop to be single-escaped in HTTP response, got %q", body)
+	}
+	if strings.Contains(body, "&amp;amp;") {
+		testRunner.Errorf("Detected double-escaping in HTTP response: %q", body)
+	}
+}
+
+type E2ESafeLinkProps struct {
+	Url  gossr.SafeUrl
+	Body gossr.RawHtml
+}
+
+func TestE2ECustomTagReflectionPropsInHttp(testRunner *testing.T) {
+	gossr.Register("E2ESafeLink", func(props E2ESafeLinkProps) gossr.SSR {
+		return gossr.Render(`<a href="${properties.Url}">${properties.Body}</a>`, props)
+	})
+
+	serverMux := http.NewServeMux()
+	serverMux.HandleFunc("/custom-tag-reflection-test", gossr.Handler(func(request *http.Request) gossr.SSR {
+		return gossr.Render(`<E2ESafeLink url="javascript:alert(1)" body="<strong>Trusted Content</strong>" />`)
+	}))
+
+	testServer := httptest.NewServer(serverMux)
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/custom-tag-reflection-test")
+	if err != nil {
+		testRunner.Fatalf("Failed GET request: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		testRunner.Errorf("Expected 200 OK for custom tag with SafeUrl and RawHtml props, got %d", response.StatusCode)
+	}
+
+	bodyBytes, err := io.ReadAll(response.Body)
+	if err != nil {
+		testRunner.Fatalf("Failed reading body: %v", err)
+	}
+
+	body := string(bodyBytes)
+	if !strings.Contains(body, `href="about:blank"`) {
+		testRunner.Errorf("Expected SafeUrl field to sanitize dangerous URL in HTTP response, got %q", body)
+	}
+	if !strings.Contains(body, `<strong>Trusted Content</strong>`) {
+		testRunner.Errorf("Expected RawHtml field to render unescaped in HTTP response, got %q", body)
+	}
+}

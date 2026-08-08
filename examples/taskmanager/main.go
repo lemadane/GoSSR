@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lemadane/gossr"
 )
@@ -34,7 +35,7 @@ func handleTaskPage(responseWriter http.ResponseWriter, request *http.Request) {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>GoSSR Task Manager (AHA Stack)</title>
 	<script src="https://unpkg.com/htmx.org@1.9.10"></script>
-	<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+	<script defer src="https://unpkg.com/alpinejs@3.14.8/dist/cdn.min.js"></script>
 	<style>
 		:root {
 			--background-color: #0f172a;
@@ -366,6 +367,13 @@ func setupRoutes() *http.ServeMux {
 
 func main() {
 	serverMux := setupRoutes()
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      serverMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
 	fmt.Println("Server running on http://localhost:8080/tasks")
-	_ = http.ListenAndServe(":8080", serverMux)
+	_ = server.ListenAndServe()
 }

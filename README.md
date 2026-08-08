@@ -13,8 +13,8 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 - **Declarative JSX-Style Custom Tags (`gossr.Register`)**: Register custom component tags (`gossr.Register("UserBadge", UserBadgeFunc)`) and compose self-closing (`<UserBadge name="Sarah" role="Admin" />`) or paired tags (`<Card title="Settings"><h1>Body Content</h1></Card>`) directly in HTML templates.
 - **Strict Custom Tag Attribute Validation**: Automatically validates attributes passed to custom component tags against target struct fields and raises a clear error on typos (`<UserCard nme="Sarah" />`).
 - **Zero CLI Build Steps**: Runs directly with standard `go run` or `go build` with zero node_modules or transpilers.
-- **Comprehensive HTML/XSS Protection**: Standard string and property substitutions are automatically HTML-escaped (`html.EscapeString`). `gossr.SSR` components and explicit `gossr.RawHtml` wrappers are preserved as trusted raw HTML.
-- **Context-Aware HTML Security Scanner**: Enforces strict security rules by detecting and blocking dangerous `${...}` interpolations inside `<script>` blocks, `<style>` blocks, HTML comments (`<!-- ... -->`), inline event handler attributes (`onclick`, `onload`, `on*`), and inline `style="..."` attributes.
+- **Comprehensive HTML/XSS Protection**: Standard string and property substitutions are automatically HTML-escaped (`html.EscapeString`). Plain strings interpolated into URL-bearing attributes (`href`, `src`, `action`, `formaction`, `cite`, `data`, `poster`, `icon`) are automatically sanitized (`SanitizeUrl`) to `about:blank`. `gossr.SSR` components and explicit `gossr.RawHtml` wrappers are preserved as trusted raw HTML.
+- **Context-Aware HTML Security Scanner**: Enforces strict security rules by detecting and blocking dangerous `${...}` interpolations inside `<script>` blocks, `<style>` blocks, HTML comments (`<!-- ... -->`), inline event handler attributes (`onclick`, `onload`, `on*`), inline `style="..."` attributes, Alpine.js directives (`x-data`, `x-init`, `x-effect`, `x-on:*`, `@*`, `x-bind:*`, `: *`), and HTMX executable attributes (`hx-on:*`, `hx-vals`, `hx-headers`, `hx-vars`).
 - **Explicit Security Wrappers**:
   - `gossr.RawHtml` (`gossr.Raw("<b>trusted</b>")`): Mark explicitly trusted HTML content to bypass escaping.
   - `gossr.SafeUrl` (`gossr.URL("https://...")`): Enforces a strict URL protocol allowlist (`http`, `https`, `mailto`, `tel`, relative paths `/`, `#`, `?`, `.`) while sanitizing dangerous protocols (`javascript:`, `vbscript:`, `data:`) to `about:blank`.
@@ -25,8 +25,8 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Condition ? "OptionA" : "OptionB"}`: Inline ternary conditional evaluation.
   - `${properties.Role == "ADMIN" ? "checked" : ""}`: Equality comparison ternaries for Checkboxes and Radio Buttons.
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
-- **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking (`MaxRenderDepth = 100`).
-- **Native HTTP Handlers**: Serve components directly with `gossr.RenderHTTP(w, comp)` or `gossr.Handler(factoryFn)`, automatically setting `Content-Type: text/html; charset=utf-8` headers.
+- **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking across custom tags (`MaxRenderDepth = 100`).
+- **Native HTTP Handlers & Error Propagation**: Serve components directly with `gossr.RenderHTTP(w, comp)` or `gossr.Handler(factoryFn)`, automatically setting `Content-Type: text/html; charset=utf-8` headers and calling a configurable `ErrorHandler` callback (HTTP 500) on render failures.
 - **AHA Stack Native (ASTACK)**: Unescaped integration with **HTMX** out-of-band updates (`hx-delete`, `hx-target`, `hx-swap`) and **Alpine.js** client state (`x-data`, `x-show`, `@click`).
 
 ---
@@ -384,6 +384,8 @@ go test -count=1 -v ./...
 --- PASS: TestPairedCustomTagWithChildren (0.00s)
 === RUN   TestMapFactoryCustomTag
 --- PASS: TestMapFactoryCustomTag (0.00s)
+=== RUN   TestDynamicCustomTagAttributeEscaping
+--- PASS: TestDynamicCustomTagAttributeEscaping (0.00s)
 === RUN   TestSimplePropertySubstitution
 --- PASS: TestSimplePropertySubstitution (0.00s)
 === RUN   TestNestedPropertySubstitution
@@ -402,6 +404,8 @@ go test -count=1 -v ./...
 --- PASS: TestRealMapLambdaExecution (0.00s)
 === RUN   TestArbitraryNestedPropertyDepth
 --- PASS: TestArbitraryNestedPropertyDepth (0.00s)
+=== RUN   TestHandlerErrorPropagation
+--- PASS: TestHandlerErrorPropagation (0.00s)
 === RUN   TestFormInputAttributeQuoteProtection
 --- PASS: TestFormInputAttributeQuoteProtection (0.00s)
 === RUN   TestCheckboxAndRadioButtonRendering
@@ -432,10 +436,18 @@ go test -count=1 -v ./...
 --- PASS: TestSafeUrlSanitizer (0.00s)
 === RUN   TestNilPropertyHandling
 --- PASS: TestNilPropertyHandling (0.00s)
+=== RUN   TestNormalStringInUrlAttributeAutoSanitized
+--- PASS: TestNormalStringInUrlAttributeAutoSanitized (0.00s)
+=== RUN   TestExecutableAttributeRejectionAlpineAndHTMX
+--- PASS: TestExecutableAttributeRejectionAlpineAndHTMX (0.00s)
+=== RUN   TestComponentRecursionDepthProtection
+--- PASS: TestComponentRecursionDepthProtection (0.01s)
+=== RUN   TestCustomTagPropsReflectionNoPanic
+--- PASS: TestCustomTagPropsReflectionNoPanic (0.00s)
 PASS
-ok      github.com/lemadane/gossr       0.007s
+ok      github.com/lemadane/gossr       0.014s
 === RUN   TestE2ETaskPageEndpoint
---- PASS: TestE2ETaskPageEndpoint (0.01s)
+--- PASS: TestE2ETaskPageEndpoint (0.02s)
 === RUN   TestE2ECreateTaskEndpoint
 --- PASS: TestE2ECreateTaskEndpoint (0.01s)
 === RUN   TestE2EToggleTaskEndpoint
@@ -443,15 +455,25 @@ ok      github.com/lemadane/gossr       0.007s
 === RUN   TestE2EDeleteTaskEndpoint
 --- PASS: TestE2EDeleteTaskEndpoint (0.00s)
 === RUN   TestE2ESearchEndpoint
---- PASS: TestE2ESearchEndpoint (0.00s)
+--- PASS: TestE2ESearchEndpoint (0.01s)
 === RUN   TestE2ESecurityAndDollarPreservation
 --- PASS: TestE2ESecurityAndDollarPreservation (0.00s)
 === RUN   TestE2EHTTPHandlerAndCustomTags
 --- PASS: TestE2EHTTPHandlerAndCustomTags (0.00s)
 === RUN   TestE2EFormControlsCheckboxesRadio
 --- PASS: TestE2EFormControlsCheckboxesRadio (0.00s)
+=== RUN   TestE2EUrlAutoSanitizationInHttp
+--- PASS: TestE2EUrlAutoSanitizationInHttp (0.00s)
+=== RUN   TestE2EExecutableAttributeRejectionInHttp
+--- PASS: TestE2EExecutableAttributeRejectionInHttp (0.00s)
+=== RUN   TestE2ERecursionProtectionInHttp
+--- PASS: TestE2ERecursionProtectionInHttp (0.01s)
+=== RUN   TestE2EDynamicCustomTagEscapingInHttp
+--- PASS: TestE2EDynamicCustomTagEscapingInHttp (0.00s)
+=== RUN   TestE2ECustomTagReflectionPropsInHttp
+--- PASS: TestE2ECustomTagReflectionPropsInHttp (0.00s)
 PASS
-ok      github.com/lemadane/gossr/examples/taskmanager  0.034s
+ok      github.com/lemadane/gossr/examples/taskmanager  0.057s
 ```
 
 ---
