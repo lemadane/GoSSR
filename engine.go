@@ -255,6 +255,7 @@ func (n astStaticTextNode) renderAST(writer io.Writer, scopeArguments []any, dep
 }
 
 type astPropertyNode struct {
+	prefix      string
 	path        []string
 	pathString  string
 	attrContext string
@@ -263,18 +264,37 @@ type astPropertyNode struct {
 func (n astPropertyNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
 	var value any
 	var found bool
-	for _, arg := range scopeArguments {
-		value, found = resolvePropertyPath(arg, n.path)
-		if found {
-			break
+
+	if len(n.path) == 0 {
+		for _, arg := range scopeArguments {
+			if arg != nil {
+				value = arg
+				found = true
+				break
+			}
+		}
+	} else {
+		for _, arg := range scopeArguments {
+			value, found = resolvePropertyPath(arg, n.path)
+			if found {
+				break
+			}
 		}
 	}
 
 	if !found {
 		if strict {
-			return fmt.Errorf("GoSSR strict mode error: unresolved property path '${properties.%s}'", n.pathString)
+			prefix := n.prefix
+			if prefix == "" {
+				prefix = "properties"
+			}
+			return fmt.Errorf("GoSSR strict mode error: unresolved property path '${%s.%s}'", prefix, n.pathString)
 		}
-		_, err := io.WriteString(writer, fmt.Sprintf("${properties.%s}", n.pathString))
+		if len(n.path) == 0 {
+			_, err := io.WriteString(writer, fmt.Sprintf("${%s}", n.prefix))
+			return err
+		}
+		_, err := io.WriteString(writer, fmt.Sprintf("${%s.%s}", n.prefix, n.pathString))
 		return err
 	}
 	return formatAndRenderValueForContext(writer, value, n.attrContext)
@@ -368,6 +388,19 @@ func (n astMapNode) renderAST(writer io.Writer, scopeArguments []any, depth int,
 	return nil
 }
 
+type astCustomTagNode struct {
+	rawTagText string
+}
+
+func (n astCustomTagNode) renderAST(writer io.Writer, scopeArguments []any, depth int, strict bool) error {
+	expandedHtml, err := processCustomComponentTags(n.rawTagText, depth)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, expandedHtml)
+	return err
+}
+
 func parseTemplateAST(templateString string) []templateASTNode {
 	var nodes []templateASTNode
 
@@ -402,32 +435,118 @@ func parseTemplateAST(templateString string) []templateASTNode {
 }
 
 func parseFlatTemplateAST(templateString string) []templateASTNode {
-	var nodes []templateASTNode
-	propMatches := propertyRegex.FindAllStringSubmatchIndex(templateString, -1)
-	if len(propMatches) > 0 {
-		lastIndex := 0
-		for _, loc := range propMatches {
-			matchStart, matchEnd := loc[0], loc[1]
-			if matchStart > lastIndex {
-				nodes = append(nodes, astStaticTextNode{text: templateString[lastIndex:matchStart]})
-			}
+	return parseExpressionsOnly(templateString)
+}
 
-			pathString := templateString[loc[2]:loc[3]]
-			attrContext := getInterpolationAttributeContext(templateString, matchStart)
-			nodes = append(nodes, astPropertyNode{
-				path:        strings.Split(pathString, "."),
-				pathString:  pathString,
-				attrContext: attrContext,
-			})
-			lastIndex = matchEnd
+func parseExpressionsOnly(templateString string) []templateASTNode {
+	var nodes []templateASTNode
+	var pos int
+
+	for pos < len(templateString) {
+		qTernaryLoc := genericQuotedTernaryRegex.FindStringIndex(templateString[pos:])
+		uTernaryLoc := genericUnquotedTernaryRegex.FindStringIndex(templateString[pos:])
+		propLoc := propertyRegex.FindStringIndex(templateString[pos:])
+		itemPropLoc := genericItemPropertyRegex.FindStringIndex(templateString[pos:])
+
+		earliestType := 0
+		earliestStart := len(templateString)
+		earliestLoc := []int(nil)
+
+		if qTernaryLoc != nil && qTernaryLoc[0] < earliestStart {
+			earliestType = 1
+			earliestStart = qTernaryLoc[0]
+			earliestLoc = qTernaryLoc
 		}
-		if lastIndex < len(templateString) {
-			nodes = append(nodes, astStaticTextNode{text: templateString[lastIndex:]})
+		if uTernaryLoc != nil && uTernaryLoc[0] < earliestStart {
+			earliestType = 2
+			earliestStart = uTernaryLoc[0]
+			earliestLoc = uTernaryLoc
 		}
-		return nodes
+		if propLoc != nil && propLoc[0] < earliestStart {
+			earliestType = 3
+			earliestStart = propLoc[0]
+			earliestLoc = propLoc
+		}
+		if itemPropLoc != nil && itemPropLoc[0] < earliestStart {
+			earliestType = 4
+			earliestStart = itemPropLoc[0]
+			earliestLoc = itemPropLoc
+		}
+
+		if earliestType == 0 {
+			if pos < len(templateString) {
+				nodes = append(nodes, astStaticTextNode{text: templateString[pos:]})
+			}
+			break
+		}
+
+		matchStart := pos + earliestLoc[0]
+		matchEnd := pos + earliestLoc[1]
+
+		if matchStart > pos {
+			nodes = append(nodes, astStaticTextNode{text: templateString[pos:matchStart]})
+		}
+
+		matchStr := templateString[matchStart:matchEnd]
+		attrContext := getInterpolationAttributeContext(templateString, matchStart)
+
+		if earliestType == 1 {
+			submatches := genericQuotedTernaryRegex.FindStringSubmatch(matchStr)
+			if len(submatches) >= 7 {
+				nodes = append(nodes, astTernaryNode{
+					prefix:      submatches[1],
+					path:        strings.Split(submatches[2], "."),
+					pathString:  submatches[2],
+					operator:    submatches[3],
+					targetValue: submatches[4],
+					trueBranch:  submatches[5],
+					falseBranch: submatches[6],
+				})
+			}
+		} else if earliestType == 2 {
+			submatches := genericUnquotedTernaryRegex.FindStringSubmatch(matchStr)
+			if len(submatches) >= 7 {
+				nodes = append(nodes, astTernaryNode{
+					prefix:      submatches[1],
+					path:        strings.Split(submatches[2], "."),
+					pathString:  submatches[2],
+					operator:    submatches[3],
+					targetValue: submatches[4],
+					trueBranch:  strings.Trim(submatches[5], `"`),
+					falseBranch: strings.Trim(submatches[6], `"`),
+				})
+			}
+		} else if earliestType == 3 {
+			submatches := propertyRegex.FindStringSubmatch(matchStr)
+			if len(submatches) >= 2 {
+				nodes = append(nodes, astPropertyNode{
+					prefix:      "properties",
+					path:        strings.Split(submatches[1], "."),
+					pathString:  submatches[1],
+					attrContext: attrContext,
+				})
+			}
+		} else if earliestType == 4 {
+			submatches := genericItemPropertyRegex.FindStringSubmatch(matchStr)
+			if len(submatches) >= 2 {
+				var path []string
+				var pathStr string
+				if len(submatches) >= 3 && submatches[2] != "" {
+					path = strings.Split(submatches[2], ".")
+					pathStr = submatches[2]
+				}
+				nodes = append(nodes, astPropertyNode{
+					prefix:      submatches[1],
+					path:        path,
+					pathString:  pathStr,
+					attrContext: attrContext,
+				})
+			}
+		}
+
+		pos = matchEnd
 	}
 
-	nodes = append(nodes, astStaticTextNode{text: templateString})
 	return nodes
 }
 
@@ -466,12 +585,18 @@ func (c compiledComponent) String() string {
 }
 
 func (c compiledComponent) Render(writer io.Writer) error {
+	var sb strings.Builder
 	for _, node := range c.compiledTemplate.astNodes {
-		if err := node.renderAST(writer, c.scopeArguments, 0, isStrict()); err != nil {
+		if err := node.renderAST(&sb, c.scopeArguments, 0, isStrict()); err != nil {
 			return err
 		}
 	}
-	return nil
+	expandedHtml, err := processCustomComponentTags(sb.String(), 0)
+	if err != nil {
+		return err
+	}
+	_, writeErr := io.WriteString(writer, expandedHtml)
+	return writeErr
 }
 
 // Bind returns an SSR component bound to the compiled AST and scope arguments.
@@ -600,22 +725,29 @@ func formatAndRenderValueForContext(writer io.Writer, value any, attrContext str
 
 	if ssr, isSSR := value.(SSR); isSSR {
 		if attrContext != "" {
-			// Inside HTML attributes, raw HTML/SSR components MUST be attribute-escaped
-			// to prevent attribute breakouts (e.g. RawHtml containing quotes)
-			if safeUrl, isSafeUrl := value.(SafeUrl); isSafeUrl && isUrlAttribute(attrContext) {
-				_, err := io.WriteString(writer, html.EscapeString(SanitizeUrl(safeUrl.Value)))
+			if isUrlAttribute(attrContext) {
+				// Inside URL attributes (href, src, action, etc.), RawHtml/SSR components MUST be URL sanitized
+				// unless they are SafeUrl!
+				if safeUrl, isSafeUrl := value.(SafeUrl); isSafeUrl {
+					_, err := io.WriteString(writer, html.EscapeString(SanitizeUrl(safeUrl.Value)))
+					return err
+				}
+				rawStr := ssr.String()
+				_, err := io.WriteString(writer, html.EscapeString(SanitizeUrl(rawStr)))
 				return err
 			}
+
+			// Normal attribute context (id, class, etc.): escape double quotes
 			var sb strings.Builder
 			if err := ssr.Render(&sb); err != nil {
-				return err // PROPAGATE CHILD COMPONENT RENDER ERROR UPWARD
+				return err
 			}
 			_, err := io.WriteString(writer, html.EscapeString(sb.String()))
 			return err
 		}
 
 		// Body context: render child SSR component directly into writer
-		return ssr.Render(writer) // PROPAGATE CHILD COMPONENT RENDER ERROR UPWARD
+		return ssr.Render(writer)
 	}
 
 	if reflectionValue.Kind() == reflect.Slice || reflectionValue.Kind() == reflect.Array {
@@ -673,7 +805,7 @@ func resolvePropertyPath(root any, path []string) (any, bool) {
 			mapKeyType := current.Type().Key()
 			var mapKey reflect.Value
 			if mapKeyType.Kind() == reflect.String {
-				mapKey = reflect.ValueOf(name)
+				mapKey = reflect.ValueOf(name).Convert(mapKeyType)
 			} else if mapKeyType.Kind() == reflect.Int || mapKeyType.Kind() == reflect.Int64 || mapKeyType.Kind() == reflect.Int32 || mapKeyType.Kind() == reflect.Int16 || mapKeyType.Kind() == reflect.Int8 {
 				if intVal, err := strconv.ParseInt(name, 10, 64); err == nil {
 					mapKey = reflect.ValueOf(intVal).Convert(mapKeyType)

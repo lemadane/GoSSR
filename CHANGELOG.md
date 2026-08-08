@@ -17,10 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Explicit Security Wrappers**: `gossr.RawHtml` (`gossr.Raw(...)`) and `gossr.SafeUrl` (`gossr.URL(...)`).
 - **Native HTTP Handlers**: `gossr.RenderHTTP(w, comp)` and `gossr.Handler(factoryFn)` with configurable `ErrorHandler` callback.
 - **Attribute Security Boundary Enforcement**: `RawHtml` inside HTML attribute contexts (`attrContext != ""`) is automatically attribute-escaped to prevent attribute breakouts.
-- **Nested Child Component Error Propagation**: Errors from child `SSR` component rendering propagate directly to parent components and `RenderHTTP` (returning HTTP 500) rather than being swallowed as HTML comments.
-- **Panic-Proof Map Property Resolution**: Property path resolution safely handles `map[int]T`, `map[uint]T`, and non-string map key types via type checking and parsing instead of panicking in reflection.
-- **Thread-Safe Strict Mode & Concurrency Protection**: Atomic `sync/atomic` implementation for `SetStrict(bool)` and `Strict(bool)` eliminating race conditions under concurrent requests.
-- **Real Pre-Compiled AST Node Execution Graph**: `gossr.MustCompile` and `gossr.Compile` build an immutable node graph (`astStaticNode`, `astPropertyNode`, `astTernaryNode`, `astMapNode`), providing fast regex-free AST rendering.
+- **Full AST Feature Parity**: `MustCompile` AST parser tokenizes ternaries (`astTernaryNode`), map item variables (`${item.Field}` and `${item}`), and custom component tags (`astCustomTagNode`), ensuring 100% output equality between `Render()` and `MustCompile().Bind()`.
+- **Named String Map Key Conversion**: `reflect.Value.Convert` fixes reflection panics on custom string map key types (`map[PropertyName]string`).
+- **Disambiguated Security Boundaries (`RawHtml` vs `SafeUrl`)**: `RawHtml` inside URL attributes (`href`, `src`, `action`, etc.) is URL-sanitized (`javascript:` -> `about:blank`), enforcing `SafeUrl` (`gossr.URL(...)`) as the exclusive wrapper for trusted URLs.
+- **Automated AST Feature Parity Test Suite**: Added `TestCompiledTemplateParity` asserting 100% output equality across all engine features.
 
 ### Performance
 - Pre-compiled package regexes and AST pre-parsing, achieving **6.2 µs/render** (8.3x speedup, 91% reduction in memory allocations) and fast execution for large `.map()` slice iterations.

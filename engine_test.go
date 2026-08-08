@@ -419,4 +419,74 @@ func TestNonStringKeyedMapNoPanic(testRunner *testing.T) {
 	}
 	structComp := gossr.Render(`<p>${properties.Map.key}</p>`, StructKeyProps{Map: map[struct{}]string{{}: "Val"}})
 	_ = structComp.String() // Must NOT panic!
+
+	type PropertyName string
+	type NamedStringMapProps struct {
+		Map map[PropertyName]string
+	}
+	namedComp := gossr.Render(`<p>${properties.Map.key}</p>`, NamedStringMapProps{Map: map[PropertyName]string{"key": "value"}})
+	if namedComp.String() != `<p>value</p>` {
+		testRunner.Errorf("Expected named-string map key resolution '<p>value</p>', got %q", namedComp.String())
+	}
+}
+
+func TestRawHtmlInUrlAttributeIsSanitized(testRunner *testing.T) {
+	comp := gossr.Render(`<a href="${properties.Link}">Link</a>`, struct {
+		Link gossr.RawHtml
+	}{
+		Link: gossr.Raw("javascript:alert(1)"),
+	})
+
+	output := comp.String()
+	if !strings.Contains(output, `href="about:blank"`) {
+		testRunner.Errorf("Expected RawHtml containing javascript: in href to sanitize to about:blank, got %q", output)
+	}
+}
+
+func TestCompiledTemplateParity(testRunner *testing.T) {
+	gossr.Register("TestBadge", func(props struct{ Name string }) gossr.SSR {
+		return gossr.Render(`<span class="badge">${properties.Name}</span>`, props)
+	})
+
+	type Task struct {
+		Name   string
+		Active bool
+	}
+
+	type User struct {
+		Name     string
+		Role     string
+		Active   bool
+		Items    []Task
+		RawText  gossr.RawHtml
+		SafeLink gossr.SafeUrl
+	}
+
+	userData := User{
+		Name:     "Sarah",
+		Role:     "ADMIN",
+		Active:   true,
+		Items:    []Task{{Name: "Task 1", Active: true}, {Name: "Task 2", Active: false}},
+		RawText:  gossr.Raw("<b>Trusted</b>"),
+		SafeLink: gossr.URL("https://example.com"),
+	}
+
+	templates := []string{
+		`<div>${properties.Name}</div>`,
+		`<div class="${properties.Active ? "active" : "inactive"}">${properties.Name}</div>`,
+		`<div>${properties.Role == "ADMIN" ? "checked" : "unchecked"}</div>`,
+		`<ul>${properties.Items.map(item => <li class="${item.Active ? "active" : "inactive"}">${item.Name}</li>)}</ul>`,
+		`<p>${properties.RawText}</p>`,
+		`<a href="${properties.SafeLink}">Link</a>`,
+		`<TestBadge name="Alex" />`,
+	}
+
+	for idx, tplStr := range templates {
+		normalResult := gossr.Render(tplStr, userData).String()
+		compiledResult := gossr.MustCompile(tplStr).Bind(userData).String()
+
+		if normalResult != compiledResult {
+			testRunner.Errorf("Template %d parity mismatch!\nNormal Output:   %q\nCompiled Output: %q", idx, normalResult, compiledResult)
+		}
+	}
 }

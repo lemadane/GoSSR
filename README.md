@@ -476,6 +476,10 @@ go test -count=1 -v ./...
 --- PASS: TestNestedChildComponentErrorPropagation (0.00s)
 === RUN   TestNonStringKeyedMapNoPanic
 --- PASS: TestNonStringKeyedMapNoPanic (0.00s)
+=== RUN   TestRawHtmlInUrlAttributeIsSanitized
+--- PASS: TestRawHtmlInUrlAttributeIsSanitized (0.00s)
+=== RUN   TestCompiledTemplateParity
+--- PASS: TestCompiledTemplateParity (0.00s)
 === RUN   TestFormInputAttributeQuoteProtection
 --- PASS: TestFormInputAttributeQuoteProtection (0.00s)
 === RUN   TestCheckboxAndRadioButtonRendering

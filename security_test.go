@@ -153,18 +153,21 @@ func TestNormalStringInUrlAttributeAutoSanitized(testRunner *testing.T) {
 		DangerousSrc  string
 		NormalUrl     string
 		TrustedRaw    gossr.RawHtml
+		TrustedSafe   gossr.SafeUrl
 	}
 
 	comp := gossr.Render(
 		`<a href="${properties.DangerousHref}">Link</a>`+
 			`<img src="${properties.DangerousSrc}" />`+
 			`<a href="${properties.NormalUrl}">Normal</a>`+
-			`<a href="${properties.TrustedRaw}">Trusted</a>`,
+			`<a href="${properties.TrustedRaw}">TrustedRaw</a>`+
+			`<a href="${properties.TrustedSafe}">TrustedSafe</a>`,
 		Props{
 			DangerousHref: "javascript:alert(1)",
 			DangerousSrc:  "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
 			NormalUrl:     "https://example.com/profile",
 			TrustedRaw:    gossr.Raw("javascript:trustedFunction()"),
+			TrustedSafe:   gossr.URL("https://example.com/trusted"),
 		},
 	)
 
@@ -182,8 +185,8 @@ func TestNormalStringInUrlAttributeAutoSanitized(testRunner *testing.T) {
 		testRunner.Errorf("Expected normal HTTPS URL in href attribute to be preserved, got %q", output)
 	}
 
-	if !strings.Contains(output, `href="javascript:trustedFunction()"`) {
-		testRunner.Errorf("Expected explicit RawHtml wrapper to bypass auto-sanitization, got %q", output)
+	if !strings.Contains(output, `href="https://example.com/trusted"`) {
+		testRunner.Errorf("Expected SafeUrl wrapper to be allowed in URL attribute, got %q", output)
 	}
 }
 
