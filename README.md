@@ -25,6 +25,10 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Condition ? "OptionA" : "OptionB"}`: Inline ternary conditional evaluation.
   - `${properties.Role == "ADMIN" ? "checked" : ""}`: Equality comparison ternaries for Checkboxes and Radio Buttons.
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
+- **Control Flow Directives**:
+	- `@if condition { ... } @elseif other { ... } @else { ... }`: Conditional rendering with nested HTML or custom components.
+	- `@for index, value range list { ... } @else { ... }`: Iteration over slices, arrays, maps, and other iterable values with `@break` and `@continue` support inside the loop body.
+	- `@switch value { @case a: ... @default: ... }`: Value-based branching, plus truthy `@switch { ... }` and type-switch forms.
 - **Strict Mode Validation (`gossr.Strict(true)`)**: Enables development/strict mode where typos in property paths (`${properties.Custmer.Name}`) immediately return a rendering error instead of silently passing unrendered placeholders to production HTML.
 - **Pre-Compiled Template AST (`gossr.MustCompile`)**: Pre-validates security context and compiles template ASTs at initialization time for ultra-fast binding (`.Bind(scope)`) and direct streaming (`.Render(writer, scope)`).
 - **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking across custom tags (`MaxRenderDepth = 100`).

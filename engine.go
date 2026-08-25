@@ -207,17 +207,7 @@ func (component renderComponent) Render(writer io.Writer) error {
 		return err
 	}
 
-	outputHtml := component.templateString
-
-	for _, argument := range component.scopeArguments {
-		var err error
-		outputHtml, err = processScopeArgumentProperties(outputHtml, argument)
-		if err != nil {
-			return err
-		}
-	}
-
-	processedHtml, err := processCustomComponentTags(outputHtml, component.depth)
+	processedHtml, err := renderTemplateWithControlFlow(component.templateString, component.scopeArguments, component.depth)
 	if err != nil {
 		return err
 	}
@@ -585,6 +575,15 @@ func (c compiledComponent) String() string {
 }
 
 func (c compiledComponent) Render(writer io.Writer) error {
+	if containsControlFlowDirective(c.compiledTemplate.rawTemplate) {
+		processedHtml, err := renderTemplateWithControlFlow(c.compiledTemplate.rawTemplate, c.scopeArguments, 0)
+		if err != nil {
+			return err
+		}
+		_, writeErr := io.WriteString(writer, processedHtml)
+		return writeErr
+	}
+
 	var sb strings.Builder
 	for _, node := range c.compiledTemplate.astNodes {
 		if err := node.renderAST(&sb, c.scopeArguments, 0, isStrict()); err != nil {
