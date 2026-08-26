@@ -9,6 +9,12 @@ import (
 	"github.com/lemadane/gossr"
 )
 
+func TestFrameworkVersion(testRunner *testing.T) {
+	if gossr.Version != "0.3.0" {
+		testRunner.Fatalf("Expected framework version 0.3.0, got %q", gossr.Version)
+	}
+}
+
 func TestSimplePropertySubstitution(testRunner *testing.T) {
 	type SimpleProperties struct {
 		Heading string

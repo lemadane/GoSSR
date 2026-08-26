@@ -4,6 +4,14 @@ All notable changes to **GoSSR** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.3.0] - 2026-08-26
+
+### Added & Changed
+- **`@for ... in` Control Flow Syntax**: Standardized `@for index, item in list { ... }` syntax for slice, array, and map collection iterations across the framework.
+- **Strict `in` Keyword Enforcement**: Removed legacy `range` and `from` keywords to enforce concise `in` keyword iteration across template directives.
+- **Directive Error Boundary Guard**: Fixed directive loop handling (`goto done`) in `renderControlFlowFragment` ensuring directive parsing errors return cleanly without infinite loops.
+- **Exported `gossr.Version`**: Added `Version` constant (`"0.3.0"`) to `engine.go`.
+
 ---
 
 ## [v0.2.0] - 2026-08-08 (Production Candidate)

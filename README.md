@@ -123,7 +123,7 @@ GoSSR incorporates a multi-layer security architecture and contextual HTML parse
 
 GoSSR has completed full production readiness auditing and security verification:
 
-- **Production Readiness Status**: **Production Candidate (v0.2.0)**
+- **Production Readiness Status**: **Production Candidate (v0.3.0)**
 - **Security Blockers Closed**: All security boundaries, contextual HTML escaping, URL protocol sanitization, attribute breakout protections, and executable context scanner rules (including outer and inner `.map()` lambdas) have been audited and verified.
 - **AST Feature Parity**: `gossr.MustCompile` AST node execution graph guarantees 100% output equality with `gossr.Render()`.
 - **Test Coverage**: 65 core unit/security tests and 13 E2E HTTP application scenarios pass with **76.9% / 85.6% statement coverage**.

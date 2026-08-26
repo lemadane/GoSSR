@@ -13,6 +13,9 @@ import (
 	"sync/atomic"
 )
 
+// Version is the current semantic version of the GoSSR framework.
+const Version = "0.3.0"
+
 // SSR represents any component capable of writing HTML directly to an output stream.
 type SSR interface {
 	Render(writer io.Writer) error
