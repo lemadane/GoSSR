@@ -10,7 +10,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 - **Authored and Designed by**: Lemuel Adane
 - **Coded and Architectured by**: Google Antigravity
-- **Product Test and QA**: OpenAI Codex
+- **Product Test and QA by**: OpenAI Codex
 
 ---
 
