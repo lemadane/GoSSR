@@ -6,6 +6,14 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
 
 ---
 
+## Credit and Attribution
+
+- **Authored and Designed by**: Lemuel Adane
+- **Coded and Architectured by**: Google Antigravity
+- **Product Test and QA**: OpenAI Codex
+
+---
+
 ## Key Features
 
 - **Clean & Reusable Go Package**: Importable cleanly as `import "github.com/lemadane/gossr"`.
