@@ -126,34 +126,74 @@ GoSSR has completed full production readiness auditing and security verification
 
 ### 1. Register Custom JSX-Style Component Tags (`gossr.Register`)
 
+Register reusable UI components with `gossr.Register("TagName", TagFunc)` and compose them directly in HTML templates with declarative custom tags:
+
 ```go
 package main
 
 import "github.com/lemadane/gossr"
 
-type UserBadgeProps struct {
-	Name string
-	Role string
+// User data struct
+type User struct {
+	ID     int
+	Name   string
+	Email  string
+	Role   string
+	Avatar string
 }
 
-func UserBadge(props UserBadgeProps) gossr.SSR {
+// UserCardProps defines parameters accepted by the UserCard component
+type UserCardProps struct {
+	Name   string
+	Email  string
+	Role   string
+	Avatar string
+}
+
+// UserCard component renders an individual user card
+func UserCard(props UserCardProps) gossr.SSR {
 	return gossr.Render(`
-		<span class="badge ${properties.Role}">${properties.Name} (${properties.Role})</span>
+		<div class="user-card">
+			<img src="${properties.Avatar}" alt="${properties.Name}" class="avatar" />
+			<div class="user-info">
+				<h3>${properties.Name}</h3>
+				<p class="email">${properties.Email}</p>
+				<span class="role-badge ${properties.Role}">${properties.Role}</span>
+			</div>
+		</div>
 	`, props)
 }
 
 func init() {
-	// Register custom component tag
-	gossr.Register("UserBadge", UserBadge)
+	// Register UserCard as a custom HTML component tag
+	gossr.Register("UserCard", UserCard)
 }
 
-func UserList() gossr.SSR {
+// UserListProps defines parameters accepted by UserListGoSSR
+type UserListProps struct {
+	Title string
+	Users []User
+}
+
+// UserListGoSSR component renders a list of UserCard components using @for index, item in Users
+func UserListGoSSR(props UserListProps) gossr.SSR {
 	return gossr.Render(`
-		<div class="user-list">
-			<UserBadge name="Sarah Connor" role="Admin" />
-			<UserBadge name="Alex Mercer" role="Developer" />
+		<div class="user-list-container">
+			<h2>${properties.Title}</h2>
+			<div class="user-grid">
+				@for index, user in Users {
+					<UserCard 
+						name="${user.Name}" 
+						email="${user.Email}" 
+						role="${user.Role}" 
+						avatar="${user.Avatar}" 
+					/>
+				} @else {
+					<p class="empty-state">No users found in this directory.</p>
+				}
+			</div>
 		</div>
-	`)
+	`, props)
 }
 ```
 
@@ -184,8 +224,14 @@ func main() {
 	}))
 
 	// Option B: Use gossr.RenderHTTP directly inside standard handlers
-	http.HandleFunc("/tasks", func(w http.ResponseWriter, r *http.Request) {
-		comp := TaskList(TaskListProperties{Title: "Deliverables"})
+	http.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
+		comp := UserListGoSSR(UserListProps{
+			Title: "Team Directory",
+			Users: []User{
+				{ID: 1, Name: "Sarah Connor", Email: "sarah@example.com", Role: "Admin", Avatar: "/avatars/sarah.jpg"},
+				{ID: 2, Name: "Alex Mercer", Email: "alex@example.com", Role: "Developer", Avatar: "/avatars/alex.jpg"},
+			},
+		})
 		_ = gossr.RenderHTTP(w, comp)
 	})
 
