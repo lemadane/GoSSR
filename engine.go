@@ -796,6 +796,11 @@ func resolvePropertyPath(root any, path []string) (any, bool) {
 
 		if current.Kind() == reflect.Struct {
 			field := current.FieldByName(name)
+			if !field.IsValid() {
+				field = current.FieldByNameFunc(func(fieldName string) bool {
+					return strings.EqualFold(fieldName, name)
+				})
+			}
 			if !field.IsValid() || !field.CanInterface() {
 				return nil, false
 			}

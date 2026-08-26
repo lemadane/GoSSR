@@ -34,7 +34,7 @@ func (signal controlFlowSignal) String() string {
 
 func containsControlFlowDirective(templateString string) bool {
 	return strings.Contains(templateString, "@if") || strings.Contains(templateString, "@for") || strings.Contains(templateString, "@switch") ||
-		strings.Contains(templateString, "@break") || strings.Contains(templateString, "@continue") || strings.Contains(templateString, "@return")
+		strings.Contains(templateString, "@defer") || strings.Contains(templateString, "@panic") || strings.Contains(templateString, "@break") || strings.Contains(templateString, "@continue") || strings.Contains(templateString, "@return")
 }
 
 func renderTemplateWithControlFlow(templateString string, scopeArguments []any, depth int) (string, error) {
@@ -48,19 +48,103 @@ func renderTemplateWithControlFlow(templateString string, scopeArguments []any, 
 	return output, nil
 }
 
+type deferredBlock struct {
+	header string
+	body   string
+}
+
+func renderDeferDirective(templateString string, startIndex int) (string, string, int, error) {
+	position := skipWhitespace(templateString, startIndex+len("@defer"))
+	headEnd := strings.IndexByte(templateString[position:], '{')
+	if headEnd == -1 {
+		return "", "", 0, fmt.Errorf("GoSSR malformed @defer directive")
+	}
+	header := strings.TrimSpace(templateString[position : position+headEnd])
+	body, nextIndex, err := consumeBalancedBlock(templateString, position+headEnd)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return header, body, nextIndex, nil
+}
+
+func renderPanicDirective(templateString string, startIndex int, scopeArguments []any, locals map[string]any) (error, int, error) {
+	position := skipWhitespace(templateString, startIndex+len("@panic"))
+	endIndex := position
+	for endIndex < len(templateString) {
+		ch := templateString[endIndex]
+		if ch == '\n' || ch == '\r' || ch == ';' || ch == '}' || ch == '<' || ch == '@' {
+			break
+		}
+		endIndex++
+	}
+	expr := strings.TrimSpace(templateString[position:endIndex])
+
+	var panicMessage any = "GoSSR template panic"
+	if expr != "" {
+		val, found, err := evaluateControlExpression(expr, scopeArguments, locals, true)
+		if err == nil && found && val != nil {
+			panicMessage = val
+		} else {
+			panicMessage = expr
+		}
+	}
+
+	return fmt.Errorf("%v", panicMessage), endIndex, nil
+}
+
+func executeDeferredBlocks(defers []deferredBlock, scopeArguments []any, locals map[string]any, depth int, renderErr error) (string, error) {
+	if len(defers) == 0 {
+		return "", renderErr
+	}
+
+	var deferSb strings.Builder
+	for i := len(defers) - 1; i >= 0; i-- {
+		d := defers[i]
+		deferLocals := cloneLocals(locals)
+		if renderErr != nil {
+			deferLocals["error"] = renderErr.Error()
+			deferLocals["err"] = renderErr.Error()
+		}
+
+		if d.header != "" {
+			val, found, _ := evaluateControlExpression(d.header, scopeArguments, deferLocals, false)
+			if found && val != nil {
+				if _, hasErr := deferLocals["error"]; !hasErr {
+					deferLocals["error"] = val
+					deferLocals["err"] = val
+				}
+			}
+		}
+
+		deferHtml, _, err := renderControlFlowFragment(d.body, scopeArguments, deferLocals, depth)
+		if err != nil {
+			return deferSb.String(), err
+		}
+		deferSb.WriteString(deferHtml)
+	}
+
+	return deferSb.String(), nil
+}
+
 func renderControlFlowFragment(templateString string, scopeArguments []any, locals map[string]any, depth int) (string, controlFlowSignal, error) {
 	if templateString == "" {
 		return "", controlFlowSignalNone, nil
 	}
 
 	var sb strings.Builder
+	var defers []deferredBlock
 	position := 0
+
+	var signal controlFlowSignal
+	var renderErr error
+
 	for position < len(templateString) {
 		directiveIndex := findNextTopLevelDirective(templateString, position)
 		if directiveIndex == -1 {
 			fragment, err := renderTemplateFragment(templateString[position:], scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(fragment)
 			break
@@ -69,62 +153,109 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 		if directiveIndex > position {
 			fragment, err := renderTemplateFragment(templateString[position:directiveIndex], scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(fragment)
 		}
 
 		switch {
 		case matchesDirectiveAt(templateString, directiveIndex, "if"):
-			branchHtml, nextIndex, signal, err := renderIfDirective(templateString, directiveIndex, scopeArguments, locals, depth)
+			branchHtml, nextIndex, sig, err := renderIfDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(branchHtml)
 			position = nextIndex
-			if signal != controlFlowSignalNone {
-				return sb.String(), signal, nil
+			if sig != controlFlowSignalNone {
+				signal = sig
+				goto done
 			}
 			continue
 		case matchesDirectiveAt(templateString, directiveIndex, "for"):
-			loopHtml, nextIndex, signal, err := renderForDirective(templateString, directiveIndex, scopeArguments, locals, depth)
+			loopHtml, nextIndex, sig, err := renderForDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(loopHtml)
 			position = nextIndex
-			if signal != controlFlowSignalNone {
-				return sb.String(), signal, nil
+			if sig != controlFlowSignalNone {
+				signal = sig
+				goto done
 			}
 			continue
 		case matchesDirectiveAt(templateString, directiveIndex, "switch"):
-			switchHtml, nextIndex, signal, err := renderSwitchDirective(templateString, directiveIndex, scopeArguments, locals, depth)
+			switchHtml, nextIndex, sig, err := renderSwitchDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(switchHtml)
 			position = nextIndex
-			if signal != controlFlowSignalNone {
-				return sb.String(), signal, nil
+			if sig != controlFlowSignalNone {
+				signal = sig
+				goto done
 			}
 			continue
+		case matchesDirectiveAt(templateString, directiveIndex, "defer"):
+			header, body, nextIndex, err := renderDeferDirective(templateString, directiveIndex)
+			if err != nil {
+				renderErr = err
+				break
+			}
+			defers = append(defers, deferredBlock{header: header, body: body})
+			position = nextIndex
+			continue
+		case matchesDirectiveAt(templateString, directiveIndex, "panic"):
+			panicErr, nextIndex, err := renderPanicDirective(templateString, directiveIndex, scopeArguments, locals)
+			if err != nil {
+				renderErr = err
+				break
+			}
+			renderErr = panicErr
+			position = nextIndex
+			goto done
 		case matchesDirectiveAt(templateString, directiveIndex, "break"):
-			return sb.String(), controlFlowSignalBreak, nil
+			signal = controlFlowSignalBreak
+			goto done
 		case matchesDirectiveAt(templateString, directiveIndex, "continue"):
-			return sb.String(), controlFlowSignalContinue, nil
+			signal = controlFlowSignalContinue
+			goto done
 		case matchesDirectiveAt(templateString, directiveIndex, "return"):
-			return sb.String(), controlFlowSignalReturn, nil
+			signal = controlFlowSignalReturn
+			goto done
 		default:
 			fragment, err := renderTemplateFragment(templateString[directiveIndex:directiveIndex+1], scopeArguments, locals, depth)
 			if err != nil {
-				return "", controlFlowSignalNone, err
+				renderErr = err
+				break
 			}
 			sb.WriteString(fragment)
 			position = directiveIndex + 1
 		}
 	}
 
-	return sb.String(), controlFlowSignalNone, nil
+done:
+	if len(defers) > 0 {
+		deferredOutput, err := executeDeferredBlocks(defers, scopeArguments, locals, depth, renderErr)
+		if err != nil {
+			return "", controlFlowSignalNone, err
+		}
+		if renderErr != nil {
+			if deferredOutput != "" {
+				sb.WriteString(deferredOutput)
+				return sb.String(), controlFlowSignalNone, nil
+			}
+			return "", controlFlowSignalNone, renderErr
+		}
+		sb.WriteString(deferredOutput)
+	} else if renderErr != nil {
+		return "", controlFlowSignalNone, renderErr
+	}
+
+	return sb.String(), signal, nil
 }
 
 func renderTemplateFragment(templateString string, scopeArguments []any, locals map[string]any, depth int) (string, error) {
@@ -228,7 +359,7 @@ func findNextTopLevelDirective(templateString string, startIndex int) int {
 			continue
 		}
 		if matchesDirectiveAt(templateString, index, "if") || matchesDirectiveAt(templateString, index, "for") || matchesDirectiveAt(templateString, index, "switch") ||
-			matchesDirectiveAt(templateString, index, "break") || matchesDirectiveAt(templateString, index, "continue") || matchesDirectiveAt(templateString, index, "return") {
+			matchesDirectiveAt(templateString, index, "defer") || matchesDirectiveAt(templateString, index, "panic") || matchesDirectiveAt(templateString, index, "break") || matchesDirectiveAt(templateString, index, "continue") || matchesDirectiveAt(templateString, index, "return") {
 			return index
 		}
 	}

@@ -26,9 +26,13 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Role == "ADMIN" ? "checked" : ""}`: Equality comparison ternaries for Checkboxes and Radio Buttons.
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
 - **Control Flow Directives**:
-	- `@if condition { ... } @elseif other { ... } @else { ... }`: Conditional rendering with nested HTML or custom components.
-	- `@for index, value range list { ... } @else { ... }`: Iteration over slices, arrays, maps, and other iterable values with `@break` and `@continue` support inside the loop body.
-	- `@switch value { @case a: ... @default: ... }`: Value-based branching, plus truthy `@switch { ... }` and type-switch forms.
+	- `@if condition { ... } @elseif other { ... } @else { ... }`: Conditional rendering with full expression evaluation.
+	- `@for index, value range list { ... } @else { ... }`: Iteration over slices, arrays, and maps with `@else` empty-state fallbacks.
+	- `@break` & `@continue`: Loop iteration control inside `@for` blocks.
+	- `@switch value { @case a: ... @default: ... }`: Value matching, truthy boolean switching, and Go type-switching (`case int:`, `case string:`).
+	- `@return`: Early return signal from templates, loops, and deferred blocks.
+	- `@defer [header] { ... }`: Deferred block execution at scope exit in LIFO order with unified `error` / `err` error-boundary recovery.
+	- `@panic [expression]`: Explicit template panic assertions that trigger deferred block unwinding.
 - **Strict Mode Validation (`gossr.Strict(true)`)**: Enables development/strict mode where typos in property paths (`${properties.Custmer.Name}`) immediately return a rendering error instead of silently passing unrendered placeholders to production HTML.
 - **Pre-Compiled Template AST (`gossr.MustCompile`)**: Pre-validates security context and compiles template ASTs at initialization time for ultra-fast binding (`.Bind(scope)`) and direct streaming (`.Render(writer, scope)`).
 - **Component Recursion Protection**: Guards against infinite component loops with stack depth tracking across custom tags (`MaxRenderDepth = 100`).
@@ -362,6 +366,252 @@ func TaskItem(properties TaskItemProperties) gossr.SSR {
 		</button>
 	</div>
 </li>
+```
+
+---
+
+## 5. Control Flow Directives & Template Logic
+
+GoSSR includes a native, full-featured control flow directive engine directly in backtick string templates with zero transpilation.
+
+### 1. Conditional Branching (`@if`, `@elseif`, `@else`)
+
+Render dynamic HTML branches based on properties, expressions, or comparison operations:
+
+```go
+type UserProfile struct {
+	Role  string
+	IsVIP bool
+}
+
+func UserDashboard(user UserProfile) gossr.SSR {
+	return gossr.Render(`
+		<div class="user-profile">
+			@if user.Role == "ADMIN" {
+				<span class="badge admin">Administrator</span>
+				<a href="/admin/settings">Admin Console</a>
+			} @elseif user.IsVIP {
+				<span class="badge vip">VIP Member</span>
+			} @else {
+				<span class="badge standard">Standard User</span>
+			}
+		</div>
+	`, map[string]any{"user": user})
+}
+```
+
+---
+
+### 2. Collection Iteration & Empty Fallback (`@for ... range` / `@else`)
+
+Iterate over slices, arrays, or maps with automatic injection of `index` / `key` and `value` / `item`. If the collection is `nil` or empty, the `@else` fallback block is rendered automatically:
+
+```go
+type Product struct {
+	Name  string
+	Price float64
+}
+
+type ProductCatalogProps struct {
+	Products []Product
+}
+
+func ProductCatalog(props ProductCatalogProps) gossr.SSR {
+	return gossr.Render(`
+		<div class="catalog">
+			<h2>Products</h2>
+			<ul>
+				@for idx, item range Products {
+					<li>#${idx}: <strong>${item.Name}</strong> - $${item.Price}</li>
+				} @else {
+					<li class="empty-state">No products available in this category.</li>
+				}
+			</ul>
+		</div>
+	`, props)
+}
+```
+
+---
+
+### 3. Loop Short-Circuiting (`@break` & `@continue`)
+
+Control loop iteration dynamically using `@break` (to exit the loop early) and `@continue` (to skip remaining statements in the current iteration):
+
+```go
+type Item struct {
+	Name       string
+	Stock      int
+	OutOfStock bool
+}
+
+type InventoryProps struct {
+	Items []Item
+}
+
+func TopAvailableItems(props InventoryProps) gossr.SSR {
+	return gossr.Render(`
+		<ul>
+			@for index, item range Items {
+				@if item.OutOfStock {
+					@continue // Skip out of stock items
+				}
+				
+				<li>#${index}: ${item.Name} (${item.Stock} in stock)</li>
+				
+				@if index >= 5 {
+					@break // Stop rendering after 5 items
+				}
+			}
+		</ul>
+	`, props)
+}
+```
+
+---
+
+### 4. Switch Statements & Type Switching (`@switch`, `@case`, `@default`)
+
+GoSSR supports value-based switching, truthy boolean switching, and Go interface type-switching:
+
+#### Value & Truthy Switch
+```go
+func OrderStatusBadge(status string) gossr.SSR {
+	return gossr.Render(`
+		@switch status {
+			@case "pending", "processing":
+				<span class="status-yellow">In Progress</span>
+			@case "shipped", "delivered":
+				<span class="status-green">Completed</span>
+			@default:
+				<span class="status-gray">Unknown (${status})</span>
+		}
+	`, map[string]any{"status": status})
+}
+```
+
+#### Polymorphic Type Switch
+```go
+func NotificationCard(payload any) gossr.SSR {
+	return gossr.Render(`
+		<div class="notification">
+			@switch P := payload.(type) {
+				case string:
+					<p class="text-notice">${P}</p>
+				case int:
+					<p class="numeric-notice">Notice Code: ${P}</p>
+				default:
+					<p class="raw-notice">Payload: ${P}</p>
+			}
+		</div>
+	`, map[string]any{"payload": payload})
+}
+```
+
+---
+
+### 5. Early Scope Return Guard Clauses (`@return`)
+
+Use `@return` as a guard clause to stop template rendering early. `@return` works in any block (top-level, `@if`, `@for`, `@switch`, or `@defer`):
+
+```go
+type Article struct {
+	Title   string
+	Content string
+}
+
+type ArticleViewProps struct {
+	Article *Article
+	CanRead bool
+}
+
+func ArticleView(props ArticleViewProps) gossr.SSR {
+	return gossr.Render(`
+		@if Article == nil {
+			<div class="error">Article not found</div>
+			@return
+		}
+
+		@if !CanRead {
+			<div class="forbidden">Access Denied</div>
+			@return
+		}
+
+		<article>
+			<h1>${Article.Title}</h1>
+			<p>${Article.Content}</p>
+		</article>
+	`, props)
+}
+```
+
+---
+
+### 6. Error Boundaries & Deferred Execution (`@defer`, `error` / `err`)
+
+Use `@defer` to register cleanup or error-recovery blocks that execute at scope exit in **LIFO** (Last-In-First-Out) order. If a rendering error or `@panic` occurs anywhere within the scope, the error is made available to `@defer` via both `error` and `err` variables:
+
+```go
+type Account struct {
+	OwnerName string
+	Balance   float64
+}
+
+type AccountDashboardProps struct {
+	Account *Account
+}
+
+func AccountDashboard(props AccountDashboardProps) gossr.SSR {
+	return gossr.Render(`
+		@defer error {
+			@if error {
+				<div class="error-boundary">
+					<h3>Dashboard Rendering Failed</h3>
+					<p>Error details: ${error}</p>
+					<button onclick="location.reload()">Retry</button>
+				</div>
+				@return
+			}
+		}
+
+		<div class="dashboard">
+			<h2>Welcome back, ${Account.OwnerName}</h2>
+			<!-- If Account is nil or invalid property access occurs, @defer catches it seamlessly -->
+			<p>Balance: $${Account.Balance}</p>
+		</div>
+	`, props)
+}
+```
+
+---
+
+### 7. Explicit Panic Safeguards (`@panic`)
+
+Use `@panic` to enforce state assertions in templates. When `@panic` is encountered, normal template rendering halts immediately and unwinds through registered `@defer` blocks:
+
+```go
+type PaymentCheckoutProps struct {
+	Amount float64
+}
+
+func PaymentCheckout(props PaymentCheckoutProps) gossr.SSR {
+	return gossr.Render(`
+		@defer error {
+			@if error {
+				<div class="alert alert-danger">Payment Error: ${err}</div>
+				@return
+			}
+		}
+
+		@if Amount <= 0 {
+			@panic "Invalid payment amount: amount must be greater than zero"
+		}
+
+		<div class="checkout">
+			<p>Processing payment of $${Amount}...</p>
+		</div>
+	`, props)
+}
 ```
 
 ---

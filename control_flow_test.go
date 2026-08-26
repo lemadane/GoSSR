@@ -100,3 +100,84 @@ func TestControlFlowSwitchAndTypeSwitch(testRunner *testing.T) {
 		testRunner.Fatalf("Expected type switch branch to render, got %q", typeSwitchComponent.String())
 	}
 }
+
+func TestControlFlowDefer(testRunner *testing.T) {
+	type Props struct {
+		Error any
+	}
+
+	// Scenario 1: Error present -> @if error triggers, renders error message, @return returns execution and skips post-if text
+	withErrorComponent := gossr.Render(
+		`<h1>Header</h1>@defer error { @if error { <p>something is wrong, ${error}</p> @return } <span>execution here if not returned</span> }`,
+		Props{Error: "invalid input"},
+	)
+	outputWithError := withErrorComponent.String()
+	if !strings.Contains(outputWithError, `<h1>Header</h1>`) || !strings.Contains(outputWithError, `<p>something is wrong, invalid input</p>`) {
+		testRunner.Fatalf("Expected @defer error branch to render header and error message, got %q", outputWithError)
+	}
+	if strings.Contains(outputWithError, `execution here if not returned`) {
+		testRunner.Fatalf("Expected @return inside @defer to stop execution of defer body, got %q", outputWithError)
+	}
+
+	// Scenario 2: Error present, testing ${err} alias
+	aliasErrorComponent := gossr.Render(
+		`@defer error { @if error { <p>error is ${err}</p> @return } }`,
+		Props{Error: "database failed"},
+	)
+	if !strings.Contains(aliasErrorComponent.String(), `<p>error is database failed</p>`) {
+		testRunner.Fatalf("Expected ${err} alias to work in @defer, got %q", aliasErrorComponent.String())
+	}
+
+	// Scenario 3: No error present -> @if error is skipped, post-if text inside @defer renders
+	noErrorComponent := gossr.Render(
+		`<h1>Header</h1>@defer error { @if error { <p>something is wrong, ${error}</p> @return } <span>execution here if not returned</span> }`,
+		Props{Error: nil},
+	)
+	outputNoError := noErrorComponent.String()
+	if !strings.Contains(outputNoError, `<h1>Header</h1>`) || !strings.Contains(outputNoError, `<span>execution here if not returned</span>`) {
+		testRunner.Fatalf("Expected fallback execution inside @defer when error is nil, got %q", outputNoError)
+	}
+	if strings.Contains(outputNoError, `something is wrong`) {
+		testRunner.Fatalf("Expected @if error to be skipped when error is nil, got %q", outputNoError)
+	}
+
+	// Scenario 4: LIFO execution order of multiple defers
+	lifoComponent := gossr.Render(
+		`start|@defer {first|}@defer {second|}end|`,
+		nil,
+	)
+	outputLifo := lifoComponent.String()
+	expectedLifo := `start|end|second|first|`
+	if outputLifo != expectedLifo {
+		testRunner.Fatalf("Expected LIFO deferred order %q, got %q", expectedLifo, outputLifo)
+	}
+}
+
+func TestControlFlowPanic(testRunner *testing.T) {
+	type Props struct {
+		Reason string
+	}
+
+	// Scenario 1: Unhandled @panic -> error is returned from component
+	unhandledComp := gossr.Render(
+		`<div>Start</div>@panic "fatal system error"<div>End</div>`,
+		nil,
+	)
+	var sb strings.Builder
+	err := unhandledComp.Render(&sb)
+	if err == nil || !strings.Contains(err.Error(), "fatal system error") {
+		testRunner.Fatalf("Expected unhandled @panic to return error, got %v", err)
+	}
+
+	// Scenario 2: Handled @panic via @defer -> panic is caught, @defer renders error HTML
+	handledComp := gossr.Render(
+		`@defer error { @if error { <div class="error">Recovered: ${error}</div> @return } }<h1>App</h1>@panic Reason`,
+		Props{Reason: "corrupted state"},
+	)
+	outputHandled := handledComp.String()
+	if !strings.Contains(outputHandled, `<h1>App</h1>`) || !strings.Contains(outputHandled, `<div class="error">Recovered: corrupted state</div>`) {
+		testRunner.Fatalf("Expected @defer to recover from @panic and render error HTML, got %q", outputHandled)
+	}
+}
+
+
