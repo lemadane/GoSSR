@@ -27,7 +27,7 @@ With **GoSSR**, you write component-based user interfaces in pure `.go` files wi
   - `${properties.Slice.map(item => <template>${item.Field}</template>)}`: Slice mapping with literal dollar sign (`$`) preservation and template variable evaluation.
 - **Control Flow Directives**:
 	- `@if condition { ... } @elseif other { ... } @else { ... }`: Conditional rendering with full expression evaluation.
-	- `@for index, value range list { ... } @else { ... }`: Iteration over slices, arrays, and maps with `@else` empty-state fallbacks.
+	- `@for index, value in list { ... } @else { ... }`: Iteration over slices, arrays, and maps with `@else` empty-state fallbacks.
 	- `@break` & `@continue`: Loop iteration control inside `@for` blocks.
 	- `@switch value { @case a: ... @default: ... }`: Value matching, truthy boolean switching, and Go type-switching (`case int:`, `case string:`).
 	- `@return`: Early return signal from templates, loops, and deferred blocks.
@@ -402,31 +402,58 @@ func UserDashboard(user UserProfile) gossr.SSR {
 
 ---
 
-### 2. Collection Iteration & Empty Fallback (`@for ... range` / `@else`)
+### 2. Collection Iteration & Empty Fallback (`@for ... in` / `@else`)
 
-Iterate over slices, arrays, or maps with automatic injection of `index` / `key` and `value` / `item`. If the collection is `nil` or empty, the `@else` fallback block is rendered automatically:
+Iterate over slices, arrays, or maps using `@for index, item in list { ... }` or single-variable `@for item in list { ... }`. Automatic scope binding exposes `index` (0-based integer) and `item` (or custom variable names) inside the loop. If the collection is `nil` or empty, the optional `@else` fallback block renders automatically:
 
 ```go
 type Product struct {
+	ID    int
 	Name  string
 	Price float64
+	Tags  []string
 }
 
-type ProductCatalogProps struct {
+type CatalogProps struct {
+	Title    string
 	Products []Product
 }
 
-func ProductCatalog(props ProductCatalogProps) gossr.SSR {
+func ProductCatalog(props CatalogProps) gossr.SSR {
 	return gossr.Render(`
 		<div class="catalog">
-			<h2>Products</h2>
-			<ul>
-				@for idx, item range Products {
-					<li>#${idx}: <strong>${item.Name}</strong> - $${item.Price}</li>
-				} @else {
-					<li class="empty-state">No products available in this category.</li>
-				}
-			</ul>
+			<h2>${properties.Title}</h2>
+			
+			<table class="product-table">
+				<thead>
+					<tr>
+						<th>#</th>
+						<th>ID</th>
+						<th>Product Name</th>
+						<th>Price</th>
+						<th>Tags</th>
+					</tr>
+				</thead>
+				<tbody>
+					@for index, item in Products {
+						<tr class="row-${index}">
+							<td>${index + 1}</td>
+							<td>#${item.ID}</td>
+							<td><strong>${item.Name}</strong></td>
+							<td>$${item.Price}</td>
+							<td>
+								@for tag in item.Tags {
+									<span class="badge">${tag}</span>
+								}
+							</td>
+						</tr>
+					} @else {
+						<tr>
+							<td colspan="5" class="empty-state">No products found in this category.</td>
+						</tr>
+					}
+				</tbody>
+			</table>
 		</div>
 	`, props)
 }
@@ -452,7 +479,7 @@ type InventoryProps struct {
 func TopAvailableItems(props InventoryProps) gossr.SSR {
 	return gossr.Render(`
 		<ul>
-			@for index, item range Items {
+			@for index, item in Items {
 				@if item.OutOfStock {
 					@continue // Skip out of stock items
 				}

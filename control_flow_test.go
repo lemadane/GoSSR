@@ -48,7 +48,7 @@ func TestControlFlowForElseBreakAndContinue(testRunner *testing.T) {
 	}
 
 	component := gossr.Render(
-		`<ul>@for index, value range Items {@if value == "skip" { @continue }<li>${index}:${value}</li>@if value == "stop" { @break }}</ul>`,
+		`<ul>@for index, value in Items {@if value == "skip" { @continue }<li>${index}:${value}</li>@if value == "stop" { @break }}</ul>`,
 		Props{Items: []string{"skip", "one", "stop", "two"}},
 	)
 
@@ -61,12 +61,32 @@ func TestControlFlowForElseBreakAndContinue(testRunner *testing.T) {
 	}
 
 	emptyComponent := gossr.Render(
-		`<ul>@for index, value range Items {<li>${index}:${value}</li>} @else {<li>empty</li>}</ul>`,
+		`<ul>@for index, value in Items {<li>${index}:${value}</li>} @else {<li>empty</li>}</ul>`,
 		Props{Items: nil},
 	)
 
 	if !strings.Contains(emptyComponent.String(), `<li>empty</li>`) {
 		testRunner.Fatalf("Expected @for @else fallback for empty collection, got %q", emptyComponent.String())
+	}
+
+	// Test single variable syntax: @for value in Items
+	singleVarComponent := gossr.Render(
+		`<ul>@for item in Items {<li>${item}</li>}</ul>`,
+		Props{Items: []string{"a", "b"}},
+	)
+	if !strings.Contains(singleVarComponent.String(), `<li>a</li><li>b</li>`) {
+		testRunner.Fatalf("Expected single variable @for loop to render items, got %q", singleVarComponent.String())
+	}
+
+	// Test that unsupported keywords ('range' and 'from') are rejected
+	legacyComponent := gossr.Render(
+		`<ul>@for index, value range Items {<li>${index}:${value}</li>}</ul>`,
+		Props{Items: []string{"x"}},
+	)
+	var sb strings.Builder
+	err := legacyComponent.Render(&sb)
+	if err == nil || !strings.Contains(err.Error(), "malformed @for header") {
+		testRunner.Fatalf("Expected legacy 'range' keyword to return malformed @for header error, got %v", err)
 	}
 }
 

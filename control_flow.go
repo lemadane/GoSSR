@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -164,7 +165,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			branchHtml, nextIndex, sig, err := renderIfDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			sb.WriteString(branchHtml)
 			position = nextIndex
@@ -177,7 +178,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			loopHtml, nextIndex, sig, err := renderForDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			sb.WriteString(loopHtml)
 			position = nextIndex
@@ -190,7 +191,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			switchHtml, nextIndex, sig, err := renderSwitchDirective(templateString, directiveIndex, scopeArguments, locals, depth)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			sb.WriteString(switchHtml)
 			position = nextIndex
@@ -203,7 +204,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			header, body, nextIndex, err := renderDeferDirective(templateString, directiveIndex)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			defers = append(defers, deferredBlock{header: header, body: body})
 			position = nextIndex
@@ -212,7 +213,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			panicErr, nextIndex, err := renderPanicDirective(templateString, directiveIndex, scopeArguments, locals)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			renderErr = panicErr
 			position = nextIndex
@@ -230,7 +231,7 @@ func renderControlFlowFragment(templateString string, scopeArguments []any, loca
 			fragment, err := renderTemplateFragment(templateString[directiveIndex:directiveIndex+1], scopeArguments, locals, depth)
 			if err != nil {
 				renderErr = err
-				break
+				goto done
 			}
 			sb.WriteString(fragment)
 			position = directiveIndex + 1
@@ -636,14 +637,16 @@ loopDone:
 	return output.String(), position, controlFlowSignalNone, nil
 }
 
+var forHeaderKeywordRegex = regexp.MustCompile(`\bin\b`)
+
 func parseForHeader(header string) (string, string, string, error) {
-	parts := strings.Split(header, "range")
-	if len(parts) != 2 {
+	loc := forHeaderKeywordRegex.FindStringIndex(header)
+	if loc == nil {
 		return "", "", "", fmt.Errorf("GoSSR malformed @for header")
 	}
 
-	left := strings.TrimSpace(parts[0])
-	rangeExpression := strings.TrimSpace(parts[1])
+	left := strings.TrimSpace(header[:loc[0]])
+	rangeExpression := strings.TrimSpace(header[loc[1]:])
 	if left == "" || rangeExpression == "" {
 		return "", "", "", fmt.Errorf("GoSSR malformed @for header")
 	}
